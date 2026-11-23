@@ -440,9 +440,11 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeFormatPrompt(
         return newJavaString(env, prompt);
     } catch (const std::exception & error) {
         __android_log_print(ANDROID_LOG_ERROR, kLogTag, "Jinja template failed: %s", error.what());
+        llamaAndroidLog(GGML_LOG_LEVEL_ERROR, error.what(), nullptr);
         throwJava(env, "java/lang/IllegalStateException", error.what());
         return nullptr;
     } catch (...) {
+        llamaAndroidLog(GGML_LOG_LEVEL_ERROR, "Unknown GGUF Jinja template error.", nullptr);
         throwJava(env, "java/lang/IllegalStateException", "Unknown GGUF Jinja template error.");
         return nullptr;
     }
@@ -851,8 +853,10 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
         );
     } catch (const std::exception & error) {
         __android_log_print(ANDROID_LOG_ERROR, kLogTag, "Generation failed: %s", error.what());
+        llamaAndroidLog(GGML_LOG_LEVEL_ERROR, error.what(), nullptr);
         reportError(error.what());
     } catch (...) {
+        llamaAndroidLog(GGML_LOG_LEVEL_ERROR, "Unknown native inference error.", nullptr);
         reportError("Unknown native inference error.");
     }
 }

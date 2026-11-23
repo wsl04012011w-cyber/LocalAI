@@ -264,6 +264,13 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
             statusBannerMessage.value = "Interrompa o streaming antes de trocar o perfil GGUF."
             return
         }
+        if (engine.loadedModel.value?.id == model.id &&
+            engine.engineState.value == EngineLifecycleState.READY
+        ) {
+            AppDiagnosticsLogger.info("MODEL", "Modelo já está ativo; pedido duplicado ignorado: ${model.fileName}")
+            statusBannerMessage.value = "${model.name} já está carregado e pronto."
+            return
+        }
         if (modelLoadInProgress || uiState.value.isLoadingModel) {
             AppDiagnosticsLogger.warn("MODEL", "Toque repetido ignorado: outro modelo já está sendo carregado.")
             statusBannerMessage.value = "Um modelo já está sendo carregado. Aguarde a conclusão."

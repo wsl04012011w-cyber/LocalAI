@@ -85,12 +85,19 @@ class JniLlamaEngineAdapter(
                 )
             }
 
-            val modelUri = resolveModelUri(model)
-            if (modelUri == null) {
+            val existingPrivateCopy = runCatching { privateModelFile(model) }
+                .getOrNull()
+                ?.takeIf(::hasValidGgufHeader)
+            val modelUri = if (existingPrivateCopy == null) resolveModelUri(model) else null
+            if (existingPrivateCopy == null && modelUri == null) {
                 _engineState.value = EngineLifecycleState.ERROR
+                AppDiagnosticsLogger.error(
+                    "MODEL",
+                    "Nenhuma cópia privada válida ou URI de origem disponível para ${model.fileName}."
+                )
                 return@withContext Result.failure(
                     IllegalStateException(
-                        "Arquivo GGUF não encontrado. Baixe o modelo e selecione o arquivo em Modelos > Abrir."
+                        "GGUF não encontrado no armazenamento privado e a origem SAF/DownloadManager não está disponível. Importe o arquivo novamente."
                     )
                 )
             }
@@ -100,7 +107,7 @@ class JniLlamaEngineAdapter(
                     "MODEL",
                     "Iniciando carregamento: ${model.fileName}; id=${model.id}; tamanho=${model.fileSizeMb} MB; n_ctx=${config.contextLength}; mmap=${config.useMmap}; mlock=${config.useMlock}"
                 )
-                val privateModelFile = stageModelFile(modelUri, model)
+                val privateModelFile = existingPrivateCopy ?: stageModelFile(modelUri!!, model)
                 AppDiagnosticsLogger.info(
                     "MODEL",
                     "GGUF pronto no armazenamento privado: ${privateModelFile.absolutePath}; bytes=${privateModelFile.length()}"
@@ -239,6 +246,7 @@ class JniLlamaEngineAdapter(
                         }
 
                         override fun onError(message: String) {
+                            AppDiagnosticsLogger.error("INFERENCE", message)
                             _engineState.value = EngineLifecycleState.ERROR
                             producer.trySend(InferenceStreamEvent.Error(message))
                         }
@@ -252,6 +260,7 @@ class JniLlamaEngineAdapter(
                 _engineState.value = EngineLifecycleState.READY
                 throw cancelled
             } catch (failure: Throwable) {
+                AppDiagnosticsLogger.error("INFERENCE", "Falha inesperada durante a geração nativa.", failure)
                 _engineState.value = EngineLifecycleState.ERROR
                 producer.trySend(
                     InferenceStreamEvent.Error(
