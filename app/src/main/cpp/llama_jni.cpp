@@ -46,6 +46,13 @@ bool abortCallback(void * userData) {
 }
 
 void llamaAndroidLog(enum ggml_log_level level, const char * text, void *) {
+    // llama.cpp emits thousands of per-node graph DEBUG lines during prefill.
+    // Writing each one to disk (open/append/close) competes with CPU inference.
+    // Keep INFO/WARN/ERROR for diagnostics and drop only verbose DEBUG output.
+    if (level == GGML_LOG_LEVEL_DEBUG) {
+        return;
+    }
+
     int priority = ANDROID_LOG_INFO;
     const char * levelName = "INFO";
     if (level == GGML_LOG_LEVEL_ERROR) { priority = ANDROID_LOG_ERROR; levelName = "ERROR"; }
@@ -655,6 +662,13 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
 
         // Prefill the prompt in n_batch-sized chunks.
         const int64_t promptEvalStartUs = llama_time_us();
+        logNativeMessage(
+            GGML_LOG_LEVEL_INFO,
+            "Generation " + std::to_string(static_cast<long long>(generationId)) +
+            " prefill started: prompt_tokens=" + std::to_string(promptTokenCount) +
+            " n_batch=" + std::to_string(safeBatch) +
+            " n_ubatch=" + std::to_string(safeMicroBatch)
+        );
         for (int32_t offset = 0; offset < promptTokenCount;) {
             if (g_stopGenerationId.load(std::memory_order_relaxed) == generationId) {
                 logNativeMessage(GGML_LOG_LEVEL_WARN,
@@ -711,6 +725,12 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
                 );
             }
             offset += chunkSize;
+            logNativeMessage(
+                GGML_LOG_LEVEL_INFO,
+                "Generation " + std::to_string(static_cast<long long>(generationId)) +
+                " prefill progress: " + std::to_string(offset) + "/" +
+                std::to_string(promptTokenCount) + " prompt tokens"
+            );
         }
 
         const int64_t promptEvalMs = std::max<int64_t>(

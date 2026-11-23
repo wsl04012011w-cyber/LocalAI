@@ -554,6 +554,10 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun handleStopGeneration() {
+        AppDiagnosticsLogger.warn(
+            "INFERENCE",
+            "Solicitação de parada recebida pela ação de parar da interface."
+        )
         viewModelScope.launch {
             engine.stopGeneration()
         }

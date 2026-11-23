@@ -2,6 +2,13 @@ cmake_minimum_required(VERSION 3.22.1)
 
 project(localai_native LANGUAGES C CXX)
 
+# Android's Debug variant propagates CMAKE_BUILD_TYPE=Debug to every
+# llama.cpp/ggml target. That keeps symbols, but -O0 makes CPU prefill
+# impractically slow on phones. Keep the APK debuggable while optimizing
+# every native C/C++ target (not only the JNI bridge).
+add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-O3>")
+message(STATUS "LocalAI: enabling -O3 for all native C/C++ targets")
+
 include(FetchContent)
 
 # Keep the Android build portable: use the CPU backend with runtime feature detection.
