@@ -1,0 +1,6 @@
+{
+  "name": "LlamaLocal",
+  "description": "Arquitetura front-end de chat com IA local em streaming e gerenciamento de estado para inferência GGUF com llama.cpp.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
