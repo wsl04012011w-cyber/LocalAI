@@ -75,7 +75,7 @@ class DeviceHardwareInspector(private val context: Context) {
             maxContextLength = 8192,
             uriString = uri.toString(),
             origin = ModelOrigin.DEVICE_STORAGE,
-            description = "Arquivo GGUF vinculado via Storage Access Framework (SAF) pronto para fd/mmap."
+            description = "GGUF importado. O app criará uma cópia privada persistente antes de carregar o modelo."
         )
     }
 

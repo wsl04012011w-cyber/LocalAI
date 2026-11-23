@@ -58,6 +58,10 @@ object AppDiagnosticsLogger {
             }
         }
         info("DIAGNOSTICS", "Logger inicializado. arquivo=${file.absolutePath}")
+        info(
+            "DEVICE",
+            "Fabricante=${Build.MANUFACTURER}; modelo=${Build.MODEL}; Android=${Build.VERSION.RELEASE}; SDK=${Build.VERSION.SDK_INT}"
+        )
     }
 
     fun logFilePath(context: Context): String = getLogFile(context.applicationContext).absolutePath
