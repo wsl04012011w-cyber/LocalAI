@@ -289,7 +289,7 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun handleImportGgufUri(uri: Uri) {
         val permissionPersisted = runCatching {
-            application.contentResolver.takePersistableUriPermission(
+            getApplication<Application>().contentResolver.takePersistableUriPermission(
                 uri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION
             )
