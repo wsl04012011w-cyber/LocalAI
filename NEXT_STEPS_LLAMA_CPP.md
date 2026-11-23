@@ -18,11 +18,11 @@ A engine JNI está integrada ao app Android. A dependência nativa usa o tag fix
 
 ## Build local
 
-Instale Android SDK, NDK 27.2.12479018 e CMake 3.22.1, depois execute:
+Instale Android SDK, NDK 27.2.12479018, CMake 3.22.1 e Gradle 9.3.1, depois execute:
 
-    ./gradlew :app:testDebugUnitTest :app:assembleDebug
+    gradle :app:testDebugUnitTest :app:assembleDebug
 
-O CMake baixa o código oficial de llama.cpp e o submódulo ggml durante a primeira configuração. É necessário acesso à internet nessa etapa.
+O workflow usa Gradle 9.3.1 diretamente porque este repositório ainda não versiona os scripts do Gradle Wrapper. O CMake baixa o código oficial de llama.cpp e o submódulo ggml durante a primeira configuração. É necessário acesso à internet nessa etapa.
 
 ## Limites atuais
 

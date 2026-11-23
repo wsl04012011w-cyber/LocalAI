@@ -51,6 +51,8 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
 
       - name: Generate temporary debug signing key
         run: |
@@ -66,11 +68,8 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
-      - name: Make Gradle wrapper executable
-        run: chmod +x ./gradlew
-
       - name: Run unit tests and build APK
-        run: ./gradlew --no-daemon --max-workers=2 --stacktrace :app:testDebugUnitTest :app:assembleDebug
+        run: gradle --no-daemon --max-workers=2 --stacktrace :app:testDebugUnitTest :app:assembleDebug
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
