@@ -23,6 +23,7 @@ import com.example.engine.InferenceStreamEvent
 import com.example.engine.JniLlamaEngineAdapter
 import com.example.engine.LocalInferenceEngine
 import com.example.engine.PromptFormatter
+import com.example.engine.ThinkingTagParser
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
