@@ -48,20 +48,17 @@ sealed interface InferenceStreamEvent {
 }
 
 /**
- * Contract that decouples the UI/State layer from the native llama.cpp runtime.
- *
- * When compiling the C++ NDK layer in a target environment, provide a JNI-backed
- * implementation of this interface calling:
- *  - llama_backend_init()
- *  - llama_model_load_from_file(path, model_params)
- *  - llama_new_context_with_model(model, ctx_params)
- *  - llama_decode(ctx, batch) + llama_sampler_sample() in a cancellable loop
+ * Contract that decouples the UI/state layer from the llama.cpp runtime.
+ * The JNI implementation owns the native model and creates an inference context
+ * for each generation, then exposes decoded token pieces as a Kotlin Flow.
  */
 interface LocalInferenceEngine {
     val engineState: StateFlow<EngineLifecycleState>
     val loadedModel: StateFlow<GgufModelSpec?>
     val telemetry: StateFlow<EngineTelemetry>
     val isNativeBridgeLinked: Boolean
+    val supportsGpuOffload: Boolean
+        get() = false
 
     suspend fun loadModel(model: GgufModelSpec, config: InferenceConfig): Result<Unit>
     suspend fun unloadModel()

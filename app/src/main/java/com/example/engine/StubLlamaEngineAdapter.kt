@@ -42,6 +42,7 @@ class StubLlamaEngineAdapter : LocalInferenceEngine {
     override val telemetry: StateFlow<EngineTelemetry> = _telemetry.asStateFlow()
 
     override val isNativeBridgeLinked: Boolean = false
+    override val supportsGpuOffload: Boolean = false
 
     override suspend fun loadModel(model: GgufModelSpec, config: InferenceConfig): Result<Unit> {
         return engineMutex.withLock {

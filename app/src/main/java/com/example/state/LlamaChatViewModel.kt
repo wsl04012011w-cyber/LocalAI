@@ -1,6 +1,7 @@
 package com.example.state
 
 import android.app.Application
+import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -18,9 +19,9 @@ import com.example.domain.model.MessageStatus
 import com.example.engine.EngineLifecycleState
 import com.example.engine.FinishReason
 import com.example.engine.InferenceStreamEvent
+import com.example.engine.JniLlamaEngineAdapter
 import com.example.engine.LocalInferenceEngine
 import com.example.engine.PromptFormatter
-import com.example.engine.StubLlamaEngineAdapter
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.io.Closeable
 import java.util.UUID
 
 class LlamaChatViewModel(application: Application) : AndroidViewModel(application) {
@@ -36,7 +38,7 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
     private val downloadDispatcher = ModelDownloadDispatcher(application.applicationContext)
     private val initialMemory = hardwareInspector.inspectMemoryAndCpu()
     private val repository = GgufRepository(defaultThreads = (initialMemory.cpuCores / 2).coerceIn(2, 6))
-    private val engine: LocalInferenceEngine = StubLlamaEngineAdapter()
+    private val engine: LocalInferenceEngine = JniLlamaEngineAdapter(application.applicationContext)
 
     private val currentDestination = MutableStateFlow(AppDestination.CHAT)
     private val composerDraft = MutableStateFlow("")
@@ -106,6 +108,7 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
             loadedModel = core.loadedModel,
             engineState = core.engineState,
             isNativeBridgeLinked = engine.isNativeBridgeLinked,
+            gpuOffloadAvailable = engine.supportsGpuOffload,
             config = core.config,
             telemetry = core.telemetry,
             deviceMemory = ui.memory,
@@ -181,8 +184,14 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
             is LlamaChatAction.UpdateBatchSize -> repository.updateConfig { current ->
                 current.copy(batchSize = action.nBatch.coerceIn(64, current.contextLength))
             }
-            is LlamaChatAction.UpdateGpuLayers -> repository.updateConfig { current ->
-                current.copy(gpuLayers = action.layers.coerceIn(0, EngineLimits.MAX_GPU_LAYERS))
+            is LlamaChatAction.UpdateGpuLayers -> {
+                if (action.layers > 0 && !engine.supportsGpuOffload) {
+                    statusBannerMessage.value = "Esta versão foi compilada apenas com CPU; offload GPU ainda não está disponível."
+                } else {
+                    repository.updateConfig { current ->
+                        current.copy(gpuLayers = action.layers.coerceIn(0, EngineLimits.MAX_GPU_LAYERS))
+                    }
+                }
             }
             is LlamaChatAction.ToggleMmap -> repository.updateConfig { it.copy(useMmap = action.enabled) }
             is LlamaChatAction.ToggleMlock -> repository.updateConfig { it.copy(useMlock = action.enabled) }
@@ -279,10 +288,21 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun handleImportGgufUri(uri: Uri) {
+        val permissionPersisted = runCatching {
+            application.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }.isSuccess
+
         val parsed = hardwareInspector.inspectPickedGgufUri(uri)
         if (parsed != null) {
             repository.registerPickedModel(parsed)
-            statusBannerMessage.value = "Arquivo ${parsed.fileName} vinculado (${parsed.fileSizeMb} MB)."
+            statusBannerMessage.value = if (permissionPersisted) {
+                "Arquivo ${parsed.fileName} vinculado (${parsed.fileSizeMb} MB)."
+            } else {
+                "Arquivo vinculado nesta sessão. O provedor não permitiu persistir o acesso ao arquivo."
+            }
             handleLoadModel(parsed)
         } else {
             statusBannerMessage.value = "Não foi possível ler os metadados do arquivo GGUF selecionado."
@@ -446,7 +466,10 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     override fun onCleared() {
-        super.onCleared()
         generationJob?.cancel()
+        if (engine is Closeable) {
+            engine.close()
+        }
+        super.onCleared()
     }
 }

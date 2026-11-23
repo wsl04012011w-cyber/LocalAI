@@ -11,6 +11,7 @@ plugins {
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
+  ndkVersion = "27.2.12479018"
 
   defaultConfig {
     applicationId = "com.aistudio.llamalocal.xqvrmk"
@@ -20,6 +21,37 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    ndk {
+      abiFilters += listOf("arm64-v8a")
+    }
+
+    externalNativeBuild {
+      cmake {
+        arguments += listOf(
+          "-DANDROID_STL=c++_shared",
+          "-DGGML_NATIVE=OFF",
+          "-DGGML_OPENMP=OFF",
+          "-DGGML_LLAMAFILE=OFF",
+          "-DGGML_VULKAN=OFF",
+          "-DGGML_OPENCL=OFF",
+          "-DGGML_RPC=OFF",
+          "-DLLAMA_OPENSSL=OFF",
+          "-DLLAMA_BUILD_TESTS=OFF",
+          "-DLLAMA_BUILD_TOOLS=OFF",
+          "-DLLAMA_BUILD_EXAMPLES=OFF",
+          "-DLLAMA_BUILD_SERVER=OFF"
+        )
+        cppFlags += listOf("-std=c++17")
+      }
+    }
+  }
+
+  externalNativeBuild {
+    cmake {
+      path = file("src/main/cpp/CMakeLists.txt")
+      version = "3.22.1"
+    }
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,

@@ -216,10 +216,15 @@ fun EngineSettingsScreen(
                     // 5. GPU Layers strictly bounded 0..99
                     BoundedStepperControl(
                         title = "Camadas GPU Vulkan/OpenCL (n_gpu_layers)",
-                        limitText = "Limite: 0 (somente CPU) .. ${EngineLimits.MAX_GPU_LAYERS}",
+                        limitText = if (uiState.gpuOffloadAvailable) {
+                            "Limite: 0 (somente CPU) .. ${EngineLimits.MAX_GPU_LAYERS}"
+                        } else {
+                            "Backend GPU indisponível nesta build (somente CPU)."
+                        },
                         valueText = "${config.gpuLayers}",
-                        canDecrement = config.gpuLayers > 0,
-                        canIncrement = config.gpuLayers < EngineLimits.MAX_GPU_LAYERS,
+                        canDecrement = uiState.gpuOffloadAvailable && config.gpuLayers > 0,
+                        canIncrement = uiState.gpuOffloadAvailable &&
+                            config.gpuLayers < EngineLimits.MAX_GPU_LAYERS,
                         onDecrement = { onAction(LlamaChatAction.UpdateGpuLayers(config.gpuLayers - 1)) },
                         onIncrement = { onAction(LlamaChatAction.UpdateGpuLayers(config.gpuLayers + 1)) },
                         testTagPrefix = "gpu_layers"
@@ -229,10 +234,19 @@ fun EngineSettingsScreen(
                         EngineLimits.GPU_LAYER_PRESETS.forEach { preset ->
                             FilterChip(
                                 selected = config.gpuLayers == preset,
+                                enabled = uiState.gpuOffloadAvailable || preset == 0,
                                 onClick = { onAction(LlamaChatAction.UpdateGpuLayers(preset)) },
                                 label = { Text(if (preset == 0) "0 (CPU)" else "$preset") }
                             )
                         }
+                    }
+                    if (!uiState.gpuOffloadAvailable) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Esta build inclui apenas o backend CPU arm64-v8a. Os controles de offload GPU serão habilitados quando Vulkan ou OpenCL forem adicionados.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
@@ -390,9 +404,23 @@ fun EngineSettingsScreen(
 
             // JNI Integration Contract Status
             item {
-                SectionCard(title = "Contrato JNI / NDK (Ver NEXT_STEPS_LLAMA_CPP.md)") {
+                SectionCard(title = "Engine nativa / NDK") {
                     Text(
-                        text = "Guia completo de compilação NDK, CMakeLists e ligação com LocalInferenceEngine documentado em NEXT_STEPS_LLAMA_CPP.md na raiz do projeto.",
+                        text = if (uiState.isNativeBridgeLinked) {
+                            "Ponte JNI conectada ao llama.cpp. Os modelos GGUF são carregados localmente pelo NDK, sem enviar prompts ou arquivos para uma API remota."
+                        } else {
+                            "A ponte JNI nativa não está carregada."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = if (uiState.gpuOffloadAvailable) {
+                            "Backend GPU disponível nesta compilação."
+                        } else {
+                            "Backend CPU arm64-v8a ativo. Vulkan/OpenCL não fazem parte desta build."
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

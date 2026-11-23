@@ -21,6 +21,7 @@ data class LlamaChatUiState(
     val loadedModel: GgufModelSpec? = null,
     val engineState: EngineLifecycleState = EngineLifecycleState.UNLOADED,
     val isNativeBridgeLinked: Boolean = false,
+    val gpuOffloadAvailable: Boolean = false,
     val config: InferenceConfig = InferenceConfig(),
     val telemetry: EngineTelemetry = EngineTelemetry(),
     val deviceMemory: DeviceMemoryInfo = DeviceMemoryInfo(
