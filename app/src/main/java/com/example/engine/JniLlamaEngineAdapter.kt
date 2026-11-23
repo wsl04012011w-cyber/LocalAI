@@ -18,12 +18,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -191,24 +193,33 @@ class JniLlamaEngineAdapter(
         val generationJob = launch(nativeDispatcher) {
             _engineState.value = EngineLifecycleState.GENERATING
             try {
-                val prompt = formatPromptWithModelTemplate(handle, messages, config)
+                val (roles, contents) = prepareChatMessages(messages, config)
+                val prompt = nativeFormatPrompt(handle, roles, contents)
+                val qwen25Defaults = isQwen25DefaultSampling(config)
                 AppDiagnosticsLogger.info(
                     "INFERENCE",
-                    "Prompt Jinja pronto para geração id=${generationId}; chars=${prompt.length}"
+                    "Prompt Jinja pronto para geração id=${generationId}; chars=${prompt.length}; parser common_chat_session ativo"
                 )
+                if (qwen25Defaults) {
+                    AppDiagnosticsLogger.info(
+                        "INFERENCE",
+                        "Preset Qwen 2.5 aplicado: temp=0.7 top_p=0.8 top_k=20 repeat_penalty=1.05"
+                    )
+                }
                 nativeGenerate(
                     handle = handle,
                     generationId = generationId,
-                    prompt = prompt,
+                    roles = roles,
+                    contents = contents,
                     contextLength = config.contextLength,
                     batchSize = config.batchSize,
                     threads = config.threads,
                     kvCacheType = config.kvCacheQuant.toNativeType(),
                     maxTokens = config.maxTokens,
-                    temperature = config.temperature,
-                    topP = config.topP,
-                    topK = config.topK,
-                    repeatPenalty = config.repeatPenalty,
+                    temperature = if (qwen25Defaults) 0.7f else config.temperature,
+                    topP = if (qwen25Defaults) 0.8f else config.topP,
+                    topK = if (qwen25Defaults) 20 else config.topK,
+                    repeatPenalty = if (qwen25Defaults) 1.05f else config.repeatPenalty,
                     callbacks = object : NativeCallbacks {
                         override fun onStarted(promptTokens: Int, promptEvalMs: Long) {
                             promptTokenCount = promptTokens
@@ -228,6 +239,10 @@ class JniLlamaEngineAdapter(
                                     promptEvalTimeMs = promptEvalMs
                                 )
                             )
+                        }
+
+                        override fun onThinking(text: String) {
+                            if (text.isNotEmpty()) producer.trySend(InferenceStreamEvent.Thinking(text))
                         }
 
                         override fun onToken(
@@ -323,13 +338,27 @@ class JniLlamaEngineAdapter(
                 generationJob.cancel()
             }
         }
+    }.buffer(Channel.UNLIMITED)
+
+    private fun isQwen25DefaultSampling(config: InferenceConfig): Boolean {
+        val model = _loadedModel.value ?: return false
+        val isQwen25 = model.fileName.contains("qwen2.5", ignoreCase = true) ||
+            model.name.contains("qwen 2.5", ignoreCase = true) ||
+            model.architecture.contains("qwen2.5", ignoreCase = true)
+        return isQwen25 &&
+            config.temperature == 0.7f &&
+            config.topP == 0.9f &&
+            config.topK == 40 &&
+            config.repeatPenalty == 1.1f
     }
 
     override fun formatPromptPreview(messages: List<ChatMessage>, config: InferenceConfig): String {
         val handle = nativeHandle
         if (handle == 0L) return "Selecione e carregue um GGUF para renderizar o template Jinja do modelo."
-        return runCatching { formatPromptWithModelTemplate(handle, messages, config) }
-            .getOrElse { failure -> "Falha ao renderizar tokenizer.chat_template: ${failure.message ?: "template inválido"}" }
+        return runCatching {
+            val (roles, contents) = prepareChatMessages(messages, config)
+            nativeFormatPrompt(handle, roles, contents)
+        }.getOrElse { failure -> "Falha ao renderizar tokenizer.chat_template: ${failure.message ?: "template inválido"}" }
     }
 
     override suspend fun stopGeneration() {
@@ -470,11 +499,10 @@ class JniLlamaEngineAdapter(
         }
     }
 
-    private fun formatPromptWithModelTemplate(
-        handle: Long,
+    private fun prepareChatMessages(
         messages: List<ChatMessage>,
         config: InferenceConfig
-    ): String {
+    ): Pair<Array<String>, Array<String>> {
         val roles = ArrayList<String>(messages.size + 1)
         val contents = ArrayList<String>(messages.size + 1)
         if (config.systemPrompt.isNotBlank()) {
@@ -489,7 +517,7 @@ class JniLlamaEngineAdapter(
             }
             contents += message.content.trim()
         }
-        return nativeFormatPrompt(handle, roles.toTypedArray(), contents.toTypedArray())
+        return roles.toTypedArray() to contents.toTypedArray()
     }
 
     private fun resolveModelUri(model: GgufModelSpec): Uri? {
@@ -533,6 +561,7 @@ class JniLlamaEngineAdapter(
 
     private interface NativeCallbacks {
         fun onStarted(promptTokens: Int, promptEvalMs: Long)
+        fun onThinking(text: String)
         fun onToken(text: String, totalTokens: Int, tokensPerSecond: Float)
         fun onCompleted(
             finishReason: Int,
@@ -564,7 +593,8 @@ class JniLlamaEngineAdapter(
     private external fun nativeGenerate(
         handle: Long,
         generationId: Long,
-        prompt: String,
+        roles: Array<String>,
+        contents: Array<String>,
         contextLength: Int,
         batchSize: Int,
         threads: Int,

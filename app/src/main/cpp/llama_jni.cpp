@@ -430,6 +430,8 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeFormatPrompt(
         common_chat_templates_inputs inputs;
         inputs.use_jinja = true;
         inputs.add_generation_prompt = true;
+        inputs.enable_thinking = true;
+        inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
         inputs.messages.reserve(static_cast<size_t>(messageCount));
 
         for (jsize i = 0; i < messageCount; ++i) {
@@ -510,7 +512,8 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
     jobject /* thiz */,
     jlong handle,
     jlong generationId,
-    jstring promptValue,
+    jobjectArray rolesArray,
+    jobjectArray contentsArray,
     jint contextLength,
     jint batchSize,
     jint threads,
@@ -538,6 +541,9 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
     }
 
     const jmethodID onStarted = env->GetMethodID(callbackClass, "onStarted", "(IJ)V");
+    const jmethodID onThinking = env->GetMethodID(
+        callbackClass, "onThinking", "(Ljava/lang/String;)V"
+    );
     const jmethodID onToken = env->GetMethodID(
         callbackClass, "onToken", "(Ljava/lang/String;IF)V"
     );
@@ -547,7 +553,7 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
     );
     env->DeleteLocalRef(callbackClass);
 
-    if (onStarted == nullptr || onToken == nullptr ||
+    if (onStarted == nullptr || onThinking == nullptr || onToken == nullptr ||
         onCompleted == nullptr || onError == nullptr || env->ExceptionCheck()) {
         return;
     }
@@ -560,12 +566,27 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
     };
 
     try {
-        const std::string prompt = javaStringToUtf8(env, promptValue);
-        if (prompt.empty()) {
-            throw std::runtime_error("The formatted prompt is empty.");
+        const jsize roleCount = env->GetArrayLength(rolesArray);
+        const jsize contentCount = env->GetArrayLength(contentsArray);
+        if (roleCount <= 0 || roleCount != contentCount) {
+            throw std::runtime_error("Chat role/content arrays are empty or have different lengths.");
         }
-        if (prompt.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
-            throw std::runtime_error("The formatted prompt is too large to tokenize.");
+        std::vector<common_chat_msg> chatMessages;
+        chatMessages.reserve(static_cast<size_t>(roleCount));
+        for (jsize i = 0; i < roleCount; ++i) {
+            auto roleObject = static_cast<jstring>(env->GetObjectArrayElement(rolesArray, i));
+            auto contentObject = static_cast<jstring>(env->GetObjectArrayElement(contentsArray, i));
+            if (roleObject == nullptr || contentObject == nullptr) {
+                if (roleObject != nullptr) env->DeleteLocalRef(roleObject);
+                if (contentObject != nullptr) env->DeleteLocalRef(contentObject);
+                throw std::runtime_error("Chat role or content is null.");
+            }
+            common_chat_msg message;
+            message.role = javaStringToUtf8(env, roleObject);
+            message.content = javaStringToUtf8(env, contentObject);
+            env->DeleteLocalRef(roleObject);
+            env->DeleteLocalRef(contentObject);
+            chatMessages.emplace_back(std::move(message));
         }
 
         const uint32_t safeContext = static_cast<uint32_t>(
@@ -611,6 +632,23 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
         const llama_vocab * vocab = llama_model_get_vocab(engine->model);
         if (vocab == nullptr) {
             throw std::runtime_error("The loaded model does not expose a tokenizer vocabulary.");
+        }
+
+        // Use llama.cpp's own common_chat_session for both the model-specific Jinja
+        // prompt and its incremental reasoning/content parser.
+        common_chat_templates_ptr generationTemplates = common_chat_templates_init(engine->model, "");
+        common_chat_templates_inputs generationInputs;
+        generationInputs.messages = std::move(chatMessages);
+        generationInputs.add_generation_prompt = true;
+        generationInputs.enable_thinking = true;
+        generationInputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+        common_chat_session chatSession(generationTemplates.get(), vocab, generationInputs);
+        const std::string prompt = chatSession.prompt().str();
+        if (prompt.empty()) {
+            throw std::runtime_error("The model's GGUF Jinja template produced an empty prompt.");
+        }
+        if (prompt.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+            throw std::runtime_error("The formatted prompt is too large to tokenize.");
         }
 
         const int32_t requiredTokens = llama_tokenize(
@@ -760,19 +798,20 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
             throw std::runtime_error("Could not create the token sampler.");
         }
 
-        // Reduce the candidate set before applying repetition penalties to it.
-        llama_sampler_chain_add(
-            sampler.get(), llama_sampler_init_top_k(std::max(1, static_cast<int>(topK)))
-        );
+        // Apply penalties to logits first, then truncate candidates. Applying penalties
+        // after top-k can leave a tiny, distorted candidate set (notably Qwen2.5).
         llama_sampler_chain_add(
             sampler.get(),
             llama_sampler_init_penalties(
                 llama_vocab_n_tokens(vocab),
-                std::min(static_cast<int32_t>(safeContext), 256),
+                std::min(static_cast<int32_t>(safeContext), 128),
                 std::max(1.0f, repeatPenalty),
                 0.0f,
                 0.0f
             )
+        );
+        llama_sampler_chain_add(
+            sampler.get(), llama_sampler_init_top_k(std::max(1, static_cast<int>(topK)))
         );
 
         // Seed the repetition-penalty history with tokens already present in the prompt.
@@ -797,6 +836,31 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
         int32_t generatedTokens = 0;
         jint finishReason = kFinishEos;
         std::string pendingUtf8;
+        std::string emittedContent;
+        std::string emittedReasoning;
+        bool chatParserActive = true;
+
+        const auto emitThinkingDelta = [&](const std::string & delta) {
+            if (delta.empty()) return;
+            jstring javaText = newJavaString(env, delta);
+            if (javaText == nullptr) return;
+            env->CallVoidMethod(callback, onThinking, javaText);
+            env->DeleteLocalRef(javaText);
+        };
+        const auto emitParsedDeltas = [&](const common_chat_msg & parsed, jint tokenCount, jfloat speed) {
+            if (parsed.reasoning_content.size() >= emittedReasoning.size() &&
+                parsed.reasoning_content.compare(0, emittedReasoning.size(), emittedReasoning) == 0) {
+                const std::string delta = parsed.reasoning_content.substr(emittedReasoning.size());
+                emittedReasoning = parsed.reasoning_content;
+                emitThinkingDelta(delta);
+            }
+            if (parsed.content.size() >= emittedContent.size() &&
+                parsed.content.compare(0, emittedContent.size(), emittedContent) == 0) {
+                const std::string delta = parsed.content.substr(emittedContent.size());
+                emittedContent = parsed.content;
+                invokeToken(env, callback, onToken, delta, tokenCount, speed);
+            }
+        };
         const int64_t generationStartUs = llama_time_us();
 
         while (generatedTokens < safeMaxTokens) {
@@ -820,14 +884,25 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
             const int64_t elapsedUs = std::max<int64_t>(1, llama_time_us() - generationStartUs);
             const float tokensPerSecond =
                 static_cast<float>(generatedTokens) * 1000000.0f / static_cast<float>(elapsedUs);
-            invokeToken(
-                env,
-                callback,
-                onToken,
-                completePiece,
-                static_cast<jint>(generatedTokens),
-                tokensPerSecond
-            );
+            if (!completePiece.empty()) {
+                if (chatParserActive) {
+                    try {
+                        const common_chat_msg & parsed = chatSession.feed(common_chat_input(completePiece));
+                        emitParsedDeltas(parsed, static_cast<jint>(generatedTokens), tokensPerSecond);
+                    } catch (const std::exception & parserError) {
+                        chatParserActive = false;
+                        logNativeMessage(
+                            GGML_LOG_LEVEL_WARN,
+                            "common_chat_session parser fallback to literal text: " + std::string(parserError.what())
+                        );
+                        invokeToken(env, callback, onToken, completePiece,
+                            static_cast<jint>(generatedTokens), tokensPerSecond);
+                    }
+                } else {
+                    invokeToken(env, callback, onToken, completePiece,
+                        static_cast<jint>(generatedTokens), tokensPerSecond);
+                }
+            }
             if (env->ExceptionCheck()) {
                 g_stopGenerationId.store(generationId, std::memory_order_relaxed);
                 return;
@@ -872,14 +947,29 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
         }
 
         if (!pendingUtf8.empty()) {
-            invokeToken(
-                env,
-                callback,
-                onToken,
-                "\xEF\xBF\xBD",
-                static_cast<jint>(generatedTokens),
-                0.0f
-            );
+            const std::string replacement = "\xEF\xBF\xBD";
+            if (chatParserActive) {
+                try {
+                    const common_chat_msg & parsed = chatSession.feed(common_chat_input(replacement));
+                    emitParsedDeltas(parsed, static_cast<jint>(generatedTokens), 0.0f);
+                } catch (...) {
+                    invokeToken(env, callback, onToken, replacement, static_cast<jint>(generatedTokens), 0.0f);
+                }
+            } else {
+                invokeToken(env, callback, onToken, replacement, static_cast<jint>(generatedTokens), 0.0f);
+            }
+        }
+
+        if (chatParserActive) {
+            try {
+                const common_chat_msg & parsed = chatSession.finish();
+                emitParsedDeltas(parsed, static_cast<jint>(generatedTokens), 0.0f);
+            } catch (const std::exception & parserError) {
+                logNativeMessage(
+                    GGML_LOG_LEVEL_WARN,
+                    "common_chat_session finish parser warning: " + std::string(parserError.what())
+                );
+            }
         }
 
         const int64_t durationMs = std::max<int64_t>(

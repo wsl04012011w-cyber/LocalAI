@@ -34,6 +34,8 @@ sealed interface InferenceStreamEvent {
         val tokensPerSecond: Float
     ) : InferenceStreamEvent
 
+    data class Thinking(val text: String) : InferenceStreamEvent
+
     data class Completed(
         val finishReason: FinishReason,
         val totalTokens: Int,

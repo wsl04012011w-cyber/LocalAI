@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import java.io.Closeable
 import java.util.UUID
 
@@ -38,7 +39,7 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
     private val hardwareInspector = DeviceHardwareInspector(application.applicationContext)
     private val downloadDispatcher = ModelDownloadDispatcher(application.applicationContext)
     private val initialMemory = hardwareInspector.inspectMemoryAndCpu()
-    private val repository = GgufRepository(defaultThreads = (initialMemory.cpuCores / 2).coerceIn(2, 6))
+    private val repository = GgufRepository(application.applicationContext, defaultThreads = (initialMemory.cpuCores / 2).coerceIn(2, 6))
     private val engine: LocalInferenceEngine = JniLlamaEngineAdapter(application.applicationContext)
 
     private val currentDestination = MutableStateFlow(AppDestination.CHAT)
@@ -446,79 +447,95 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
 
         AppDiagnosticsLogger.info("INFERENCE", "Criada resposta id=$assistantMsgId; histórico=${historyForPrompt.size} mensagens; modelo=${engine.loadedModel.value?.fileName}")
         generationJob = viewModelScope.launch {
-            val streamBuffer = StringBuilder()
+            val responseBuffer = StringBuilder()
+            val thinkingBuffer = StringBuilder()
+            val thinkingParser = ThinkingTagParser()
+
+            suspend fun appendSmoothly(text: String, isThinking: Boolean, totalTokens: Int, tokensPerSecond: Float) {
+                var index = 0
+                val target = if (isThinking) thinkingBuffer else responseBuffer
+                while (index < text.length) {
+                    val codePoint = text.codePointAt(index)
+                    val count = Character.charCount(codePoint)
+                    target.append(text.substring(index, index + count))
+                    index += count
+                    repository.updateSessionMessages(sessionId) { messages ->
+                        messages.map { msg ->
+                            if (msg.id == assistantMsgId) {
+                                msg.copy(
+                                    content = responseBuffer.toString(),
+                                    thinkingContent = thinkingBuffer.toString(),
+                                    status = MessageStatus.STREAMING,
+                                    tokenCount = if (totalTokens >= 0) totalTokens else msg.tokenCount,
+                                    tokensPerSecond = if (tokensPerSecond >= 0f) tokensPerSecond else msg.tokensPerSecond
+                                )
+                            } else msg
+                        }
+                    }
+                    delay(STREAM_CHARACTER_DELAY_MS)
+                }
+            }
+
+            suspend fun appendParsed(text: String, totalTokens: Int, tokensPerSecond: Float) {
+                thinkingParser.push(text).forEach { segment ->
+                    appendSmoothly(segment.text, segment.isThinking, totalTokens, tokensPerSecond)
+                }
+            }
+
             try {
                 engine.streamCompletion(historyForPrompt, repository.config.value).collect { event ->
-                when (event) {
-                    is InferenceStreamEvent.Started -> {
-                        repository.updateSessionMessages(sessionId) { messages ->
-                            messages.map { msg ->
-                                if (msg.id == assistantMsgId) {
-                                    msg.copy(status = MessageStatus.STREAMING)
-                                } else msg
+                    when (event) {
+                        is InferenceStreamEvent.Started -> {
+                            repository.updateSessionMessages(sessionId) { messages ->
+                                messages.map { msg ->
+                                    if (msg.id == assistantMsgId) msg.copy(status = MessageStatus.STREAMING) else msg
+                                }
                             }
                         }
-                    }
 
-                    is InferenceStreamEvent.Token -> {
-                        streamBuffer.append(event.text)
-                        val latestText = streamBuffer.toString()
-                        repository.updateSessionMessages(sessionId) { messages ->
-                            messages.map { msg ->
-                                if (msg.id == assistantMsgId) {
-                                    msg.copy(
-                                        content = latestText,
-                                        status = MessageStatus.STREAMING,
-                                        tokenCount = event.totalTokens,
-                                        tokensPerSecond = event.tokensPerSecond
-                                    )
-                                } else msg
-                            }
-                        }
-                    }
+                        is InferenceStreamEvent.Token -> appendParsed(event.text, event.totalTokens, event.tokensPerSecond)
 
-                    is InferenceStreamEvent.Completed -> {
-                        val finalStatus = when (event.finishReason) {
-                            FinishReason.STOPPED_BY_USER -> MessageStatus.STOPPED
-                            FinishReason.EOS_TOKEN,
-                            FinishReason.MAX_TOKENS,
-                            FinishReason.CONTEXT_FULL -> MessageStatus.COMPLETED
-                        }
-                        repository.updateSessionMessages(sessionId) { messages ->
-                            messages.map { msg ->
-                                if (msg.id == assistantMsgId) {
-                                    msg.copy(
-                                        content = streamBuffer.toString().ifBlank {
-                                            if (event.finishReason == FinishReason.STOPPED_BY_USER) {
-                                                "[Interrompido antes do primeiro token. Consulte Engine > Diagnóstico e logs.]"
-                                            } else {
-                                                "[A geração terminou sem emitir tokens. Consulte Engine > Diagnóstico e logs.]"
-                                            }
-                                        },
-                                        status = finalStatus,
-                                        tokenCount = event.totalTokens,
-                                        tokensPerSecond = event.tokensPerSecond,
-                                        generationDurationMs = event.durationMs
-                                    )
-                                } else msg
-                            }
-                        }
-                    }
+                        is InferenceStreamEvent.Thinking -> appendSmoothly(event.text, true, -1, -1f)
 
-                    is InferenceStreamEvent.Error -> {
-                        repository.updateSessionMessages(sessionId) { messages ->
-                            messages.map { msg ->
-                                if (msg.id == assistantMsgId) {
-                                    msg.copy(
-                                        content = event.message,
-                                        status = MessageStatus.ERROR
-                                    )
-                                } else msg
+                        is InferenceStreamEvent.Completed -> {
+                            thinkingParser.finish().forEach { segment ->
+                                appendSmoothly(segment.text, segment.isThinking, event.totalTokens, event.tokensPerSecond)
+                            }
+                            val finalStatus = when (event.finishReason) {
+                                FinishReason.STOPPED_BY_USER -> MessageStatus.STOPPED
+                                FinishReason.EOS_TOKEN,
+                                FinishReason.MAX_TOKENS,
+                                FinishReason.CONTEXT_FULL -> MessageStatus.COMPLETED
+                            }
+                            repository.updateSessionMessages(sessionId) { messages ->
+                                messages.map { msg ->
+                                    if (msg.id == assistantMsgId) {
+                                        msg.copy(
+                                            content = responseBuffer.toString().ifBlank {
+                                                if (thinkingBuffer.isNotBlank()) "[O modelo terminou o raciocínio sem uma resposta final.]"
+                                                else if (event.finishReason == FinishReason.STOPPED_BY_USER) "[Interrompido antes do primeiro token. Consulte Engine > Diagnóstico e logs.]"
+                                                else "[A geração terminou sem emitir tokens. Consulte Engine > Diagnóstico e logs.]"
+                                            },
+                                            thinkingContent = thinkingBuffer.toString(),
+                                            status = finalStatus,
+                                            tokenCount = event.totalTokens,
+                                            tokensPerSecond = event.tokensPerSecond,
+                                            generationDurationMs = event.durationMs
+                                        )
+                                    } else msg
+                                }
                             }
                         }
-                        statusBannerMessage.value = event.message
+
+                        is InferenceStreamEvent.Error -> {
+                            repository.updateSessionMessages(sessionId) { messages ->
+                                messages.map { msg ->
+                                    if (msg.id == assistantMsgId) msg.copy(content = event.message, status = MessageStatus.ERROR) else msg
+                                }
+                            }
+                            statusBannerMessage.value = event.message
+                        }
                     }
-                }
                 }
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 AppDiagnosticsLogger.warn("INFERENCE", "Coleta cancelada para resposta $assistantMsgId.")
@@ -528,10 +545,7 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
                 repository.updateSessionMessages(sessionId) { messages ->
                     messages.map { msg ->
                         if (msg.id == assistantMsgId) {
-                            msg.copy(
-                                content = failure.message ?: "Falha ao receber a resposta da engine.",
-                                status = MessageStatus.ERROR
-                            )
+                            msg.copy(content = failure.message ?: "Falha ao receber a resposta da engine.", thinkingContent = thinkingBuffer.toString(), status = MessageStatus.ERROR)
                         } else msg
                     }
                 }
@@ -562,6 +576,8 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
             engine.stopGeneration()
         }
     }
+
+    private companion object { const val STREAM_CHARACTER_DELAY_MS = 9L }
 
     override fun onCleared() {
         AppDiagnosticsLogger.info(

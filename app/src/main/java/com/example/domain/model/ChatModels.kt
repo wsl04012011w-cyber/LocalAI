@@ -25,7 +25,8 @@ data class ChatMessage(
     val tokenCount: Int = 0,
     val tokensPerSecond: Float = 0f,
     val generationDurationMs: Long = 0L,
-    val modelName: String? = null
+    val modelName: String? = null,
+    val thinkingContent: String = ""
 )
 
 data class ConversationSession(
