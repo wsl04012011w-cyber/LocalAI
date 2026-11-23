@@ -3,7 +3,10 @@ package com.example.engine
 import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
+import com.example.data.AppDiagnosticsLogger
+import java.io.BufferedOutputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import com.example.domain.model.ChatMessage
 import com.example.domain.model.EngineTelemetry
@@ -44,7 +47,6 @@ class JniLlamaEngineAdapter(
     @Volatile
     private var nativeHandle: Long = 0L
 
-    private var stagedModelFile: File? = null
 
     private val _engineState = MutableStateFlow(EngineLifecycleState.UNLOADED)
     override val engineState: StateFlow<EngineLifecycleState> = _engineState.asStateFlow()
@@ -56,6 +58,10 @@ class JniLlamaEngineAdapter(
     override val telemetry: StateFlow<EngineTelemetry> = _telemetry.asStateFlow()
 
     override val isNativeBridgeLinked: Boolean = true
+
+    init {
+        AppDiagnosticsLogger.initialize(context)
+    }
 
     override val supportsGpuOffload: Boolean by lazy(LazyThreadSafetyMode.PUBLICATION) {
         nativeSupportsGpuOffload()
@@ -89,22 +95,26 @@ class JniLlamaEngineAdapter(
                 )
             }
 
-            var copiedFile: File? = null
             try {
-                val staged = stageModelFile(modelUri, model)
-                copiedFile = staged.cacheFile
+                AppDiagnosticsLogger.info(
+                    "MODEL",
+                    "Iniciando carregamento: ${model.fileName}; id=${model.id}; tamanho=${model.fileSizeMb} MB; n_ctx=${config.contextLength}; mmap=${config.useMmap}; mlock=${config.useMlock}"
+                )
+                val privateModelFile = stageModelFile(modelUri, model)
+                AppDiagnosticsLogger.info(
+                    "MODEL",
+                    "GGUF pronto no armazenamento privado: ${privateModelFile.absolutePath}; bytes=${privateModelFile.length()}"
+                )
                 val handle = nativeLoadModel(
-                    staged.path,
+                    privateModelFile.absolutePath,
                     config.gpuLayers,
                     config.useMmap,
-                    config.useMlock
+                    config.useMlock,
+                    AppDiagnosticsLogger.logFilePath(context)
                 )
                 check(handle != 0L) { "llama.cpp não retornou um handle de modelo válido." }
 
                 nativeHandle = handle
-                stagedModelFile = copiedFile
-                copiedFile = null
-
                 _loadedModel.value = model
                 val kvCacheMb = config.estimateKvCacheMb(model)
                 _telemetry.value = EngineTelemetry(
@@ -112,13 +122,17 @@ class JniLlamaEngineAdapter(
                     estimatedTotalFootprintMb = model.estimatedRamMb + kvCacheMb
                 )
                 _engineState.value = EngineLifecycleState.READY
+                AppDiagnosticsLogger.info(
+                    "MODEL",
+                    "Modelo confirmado como READY: ${model.fileName}; handle=$handle"
+                )
                 Result.success(Unit)
             } catch (cancelled: CancellationException) {
-                runCatching { copiedFile?.delete() }
+                AppDiagnosticsLogger.warn("MODEL", "Carregamento cancelado: ${model.fileName}")
                 _engineState.value = EngineLifecycleState.ERROR
                 throw cancelled
             } catch (failure: Throwable) {
-                runCatching { copiedFile?.delete() }
+                AppDiagnosticsLogger.error("MODEL", "Falha ao carregar ${model.fileName}", failure)
                 _engineState.value = EngineLifecycleState.ERROR
                 Result.failure(failure)
             }
@@ -290,41 +304,60 @@ class JniLlamaEngineAdapter(
             nativeFreeModel(handle)
         }
 
-        val cachedFile = stagedModelFile
-        stagedModelFile = null
-        runCatching { cachedFile?.delete() }
+        val modelName = _loadedModel.value?.fileName
         _loadedModel.value = null
+        if (handle != 0L) {
+            AppDiagnosticsLogger.info(
+                "MODEL",
+                "Handle nativo liberado; GGUF preservado em armazenamento privado: ${modelName ?: "modelo"}"
+            )
+        }
     }
 
     /**
-     * Imported models use their SAF Uri. Catalog models use the content Uri
-     * from a completed Android DownloadManager task.
+     * Model copies live in filesDir (not cacheDir). Android may clear cached
+     * files at any time, while llama.cpp requires a stable random-access mmap path.
      */
-    private data class StagedModelFile(val path: String, val cacheFile: File?)
+    private fun privateModelFile(model: GgufModelSpec): File {
+        val directory = File(context.filesDir, "gguf-models")
+        if (!directory.exists() && !directory.mkdirs()) {
+            throw IllegalStateException("Não foi possível criar o armazenamento privado dos modelos.")
+        }
+        val key = model.id.hashCode().toUInt().toString(16)
+        return File(directory, "model_${key}.gguf")
+    }
 
-    private suspend fun stageModelFile(uri: Uri, model: GgufModelSpec): StagedModelFile {
-        if (uri.scheme == "file") {
-            val direct = uri.path?.let(::File)
-            if (direct != null && direct.isFile && direct.length() > 0L) {
-                return StagedModelFile(direct.absolutePath, null)
-            }
+    private fun hasValidGgufHeader(file: File): Boolean = runCatching {
+        if (!file.isFile || file.length() < 4L) return@runCatching false
+        FileInputStream(file).use { input ->
+            val magic = ByteArray(4)
+            input.read(magic) == 4 && magic.contentEquals(byteArrayOf(0x47, 0x47, 0x55, 0x46))
+        }
+    }.getOrDefault(false)
+
+    private suspend fun stageModelFile(uri: Uri, model: GgufModelSpec): File {
+        val target = privateModelFile(model)
+        if (hasValidGgufHeader(target)) {
+            AppDiagnosticsLogger.info(
+                "MODEL",
+                "Reutilizando cópia privada existente: ${target.absolutePath}; bytes=${target.length()}"
+            )
+            return target
         }
 
-        val cacheDirectory = File(context.cacheDir, "gguf-models")
-        if (!cacheDirectory.exists() && !cacheDirectory.mkdirs()) {
-            throw IllegalStateException("Não foi possível criar a pasta temporária para o GGUF.")
-        }
-        val fileKey = model.id.hashCode().toUInt().toString(16)
-        val target = File(cacheDirectory, "model_$fileKey.gguf")
-        val partial = File(cacheDirectory, "model_$fileKey.part")
+        val partial = File(target.parentFile, "${target.name}.part")
         runCatching { partial.delete() }
         runCatching { target.delete() }
-
+        AppDiagnosticsLogger.info(
+            "MODEL",
+            "Copiando GGUF do provedor ${uri.scheme ?: "unknown"} para filesDir/gguf-models."
+        )
         try {
             val input = context.contentResolver.openInputStream(uri)
-                ?: throw IllegalStateException("O provedor SAF não abriu o arquivo GGUF para leitura.")
+                ?: throw IllegalStateException("O provedor de arquivos não abriu o GGUF para leitura.")
             input.use { source ->
-                FileOutputStream(partial).buffered().use { output ->
+                FileOutputStream(partial).use { rawOutput ->
+                    val output = BufferedOutputStream(rawOutput, 1024 * 1024)
                     source.buffered().use { bufferedSource ->
                         val buffer = ByteArray(1024 * 1024)
                         while (true) {
@@ -334,19 +367,44 @@ class JniLlamaEngineAdapter(
                             output.write(buffer, 0, count)
                         }
                     }
+                    output.flush()
+                    rawOutput.fd.sync()
                 }
             }
-            if (partial.length() < 4L) throw IllegalStateException("O arquivo selecionado está vazio ou incompleto.")
-            if (!partial.renameTo(target)) throw IllegalStateException("Não foi possível finalizar a cópia temporária do GGUF.")
-            return StagedModelFile(target.absolutePath, target)
+            if (!hasValidGgufHeader(partial)) {
+                throw IllegalStateException("O arquivo selecionado não contém um cabeçalho GGUF válido ou está incompleto.")
+            }
+            if (!partial.renameTo(target)) {
+                throw IllegalStateException("Não foi possível finalizar a cópia privada do modelo.")
+            }
+            AppDiagnosticsLogger.info(
+                "MODEL",
+                "Cópia privada concluída: ${target.absolutePath}; bytes=${target.length()}"
+            )
+            return target
         } catch (failure: Throwable) {
             runCatching { partial.delete() }
-            runCatching { target.delete() }
+            AppDiagnosticsLogger.error("MODEL", "Falha ao copiar GGUF para o armazenamento privado", failure)
             if (failure is CancellationException) throw failure
             throw IllegalStateException(
-                "Falha ao preparar o arquivo SAF para acesso aleatório: ${failure.message ?: failure.javaClass.simpleName}",
+                "Não foi possível copiar o GGUF para o armazenamento privado: ${failure.message ?: failure.javaClass.simpleName}",
                 failure
             )
+        }
+    }
+
+    override suspend fun removeStoredModel(model: GgufModelSpec) {
+        operationMutex.withLock {
+            withContext(nativeDispatcher) {
+                if (_loadedModel.value?.id == model.id) {
+                    throw IllegalStateException("Descarregue o modelo antes de remover sua cópia privada.")
+                }
+                val file = privateModelFile(model)
+                if (file.exists() && !file.delete()) {
+                    throw IllegalStateException("Não foi possível remover ${file.name} do armazenamento privado.")
+                }
+                AppDiagnosticsLogger.info("MODEL", "Cópia privada removida pelo usuário: ${file.name}")
+            }
         }
     }
 
@@ -427,7 +485,8 @@ class JniLlamaEngineAdapter(
         modelPath: String,
         gpuLayers: Int,
         useMmap: Boolean,
-        useMlock: Boolean
+        useMlock: Boolean,
+        diagnosticsFilePath: String
     ): Long
 
     private external fun nativeFormatPrompt(

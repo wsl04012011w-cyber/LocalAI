@@ -162,7 +162,7 @@ fun ModelsScreen(
                 ModelSpecCard(
                     model = model,
                     isSelectedProfile = isSelectedProfile,
-                    isBusy = uiState.isGenerating,
+                    isBusy = uiState.isGenerating || uiState.isLoadingModel,
                     onDownload = { onAction(LlamaChatAction.DownloadModel(model)) },
                     onOpenRepo = {
                         model.repositoryUrl?.let { onAction(LlamaChatAction.OpenModelRepository(it)) }

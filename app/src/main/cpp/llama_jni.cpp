@@ -29,6 +29,8 @@ constexpr jint kFinishContextFull = 3;
 
 std::once_flag g_backendInit;
 std::atomic<bool> g_abortRequested{false};
+std::mutex g_logFileMutex;
+std::string g_logFilePath;
 
 struct NativeEngine {
     llama_model * model = nullptr;
@@ -41,12 +43,24 @@ bool abortCallback(void *) {
 
 void llamaAndroidLog(enum ggml_log_level level, const char * text, void *) {
     int priority = ANDROID_LOG_INFO;
-    if (level == GGML_LOG_LEVEL_ERROR) priority = ANDROID_LOG_ERROR;
-    else if (level == GGML_LOG_LEVEL_WARN) priority = ANDROID_LOG_WARN;
-    else if (level == GGML_LOG_LEVEL_DEBUG) priority = ANDROID_LOG_DEBUG;
-    __android_log_write(priority, kLogTag, text == nullptr ? "" : text);
-}
+    const char * levelName = "INFO";
+    if (level == GGML_LOG_LEVEL_ERROR) { priority = ANDROID_LOG_ERROR; levelName = "ERROR"; }
+    else if (level == GGML_LOG_LEVEL_WARN) { priority = ANDROID_LOG_WARN; levelName = "WARN"; }
+    else if (level == GGML_LOG_LEVEL_DEBUG) { priority = ANDROID_LOG_DEBUG; levelName = "DEBUG"; }
 
+    const char * message = text == nullptr ? "" : text;
+    __android_log_write(priority, kLogTag, message);
+
+    std::lock_guard<std::mutex> lock(g_logFileMutex);
+    if (!g_logFilePath.empty()) {
+        std::ofstream file(g_logFilePath, std::ios::out | std::ios::app);
+        if (file.good()) {
+            file << "[LLAMA][" << levelName << "] " << message;
+            const size_t length = std::strlen(message);
+            if (length > 0 && message[length - 1] != '\n') file << '\n';
+        }
+    }
+}
 void throwJava(JNIEnv * env, const char * className, const std::string & message) {
     jclass exceptionClass = env->FindClass(className);
     if (exceptionClass != nullptr) {
@@ -301,9 +315,14 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeLoadModel(
     jstring fileDescriptorPath,
     jint gpuLayers,
     jboolean useMmap,
-    jboolean useMlock
+    jboolean useMlock,
+    jstring diagnosticsFilePath
 ) {
     try {
+        {
+            std::lock_guard<std::mutex> lock(g_logFileMutex);
+            g_logFilePath = javaStringToUtf8(env, diagnosticsFilePath);
+        }
         std::call_once(g_backendInit, [] {
             llama_log_set(llamaAndroidLog, nullptr);
             llama_backend_init();
@@ -356,6 +375,7 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeLoadModel(
         return reinterpret_cast<jlong>(engine.release());
     } catch (const std::exception & error) {
         __android_log_print(ANDROID_LOG_ERROR, kLogTag, "Model load failed: %s", error.what());
+        llamaAndroidLog(GGML_LOG_LEVEL_ERROR, error.what(), nullptr);
         throwJava(env, "java/lang/IllegalStateException", error.what());
         return 0;
     } catch (...) {

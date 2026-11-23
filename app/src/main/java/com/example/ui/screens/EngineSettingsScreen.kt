@@ -1,5 +1,10 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -34,8 +39,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.example.domain.model.EngineLimits
 import com.example.domain.model.KvCacheQuant
 import com.example.state.LlamaChatAction
@@ -51,6 +58,12 @@ fun EngineSettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val config = uiState.config
+    val context = LocalContext.current
+    val legacyStoragePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) onAction(LlamaChatAction.ExportDiagnostics)
+    }
     val maxCores = uiState.deviceMemory.cpuCores.coerceAtLeast(EngineLimits.MIN_THREADS)
     val recommendedThreads = (maxCores / 2).coerceIn(2, maxCores)
     val maxModelCtx = uiState.loadedModel?.maxContextLength ?: 8192
@@ -372,6 +385,35 @@ fun EngineSettingsScreen(
                             style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFontFamily),
                             color = MaterialTheme.colorScheme.primary
                         )
+                    }
+                }
+            }
+            item {
+                SectionCard(title = "Diagnóstico e logs") {
+                    Text(
+                        text = "Salva falhas de carregamento, ciclo de vida, mensagens do llama.cpp e erros nativos em um arquivo que pode ser enviado para análise.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = {
+                            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+                                ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.WRITE_EXTERNAL_STORAGE
+                                ) != PackageManager.PERMISSION_GRANTED
+                            ) {
+                                legacyStoragePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                            } else {
+                                onAction(LlamaChatAction.ExportDiagnostics)
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("export_diagnostics_button")
+                    ) {
+                        Text("Exportar logs para Downloads")
                     }
                 }
             }

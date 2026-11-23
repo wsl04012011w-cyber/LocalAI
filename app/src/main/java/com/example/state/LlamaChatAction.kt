@@ -26,6 +26,7 @@ sealed interface LlamaChatAction {
 
     data class SetPromptInspectorOpen(val open: Boolean) : LlamaChatAction
     data object DismissStatusBanner : LlamaChatAction
+    data object ExportDiagnostics : LlamaChatAction
 
     // Bounded & selective Engine / GGUF optimization configuration actions
     data class UpdateContextLength(val nCtx: Int) : LlamaChatAction

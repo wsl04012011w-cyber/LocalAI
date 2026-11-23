@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.AppDiagnosticsLogger
 import com.example.data.DeviceHardwareInspector
 import com.example.data.GgufRepository
 import com.example.data.ModelDownloadDispatcher
@@ -47,6 +48,15 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
     private val deviceMemory = MutableStateFlow(initialMemory)
 
     private var generationJob: Job? = null
+    private var modelLoadInProgress: Boolean = false
+
+    init {
+        AppDiagnosticsLogger.initialize(application.applicationContext)
+        AppDiagnosticsLogger.info(
+            "APP",
+            "LlamaChatViewModel criado; ABI=${initialMemory.primaryAbi}; RAM total=${initialMemory.totalRamMb} MB"
+        )
+    }
 
     private data class CoreEngineSnapshot(
         val sessions: List<com.example.domain.model.ConversationSession>,
@@ -167,6 +177,7 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
 
             is LlamaChatAction.SetPromptInspectorOpen -> isPromptInspectorOpen.value = action.open
             LlamaChatAction.DismissStatusBanner -> statusBannerMessage.value = null
+            LlamaChatAction.ExportDiagnostics -> handleExportDiagnostics()
 
             is LlamaChatAction.UpdateContextLength -> repository.updateConfig { current ->
                 val maxModelCtx = engine.loadedModel.value?.maxContextLength ?: 8192
@@ -253,33 +264,58 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
             statusBannerMessage.value = "Interrompa o streaming antes de trocar o perfil GGUF."
             return
         }
+        if (modelLoadInProgress || uiState.value.isLoadingModel) {
+            AppDiagnosticsLogger.warn("MODEL", "Toque repetido ignorado: outro modelo já está sendo carregado.")
+            statusBannerMessage.value = "Um modelo já está sendo carregado. Aguarde a conclusão."
+            return
+        }
+        modelLoadInProgress = true
         viewModelScope.launch {
-            repository.updateConfig { current ->
-                val boundedCtx = current.contextLength.coerceAtMost(model.maxContextLength)
-                current.copy(
-                    contextLength = boundedCtx,
-                    batchSize = current.batchSize.coerceAtMost(boundedCtx),
-                    maxTokens = current.maxTokens.coerceAtMost(boundedCtx)
-                )
-            }
-            val result = engine.loadModel(model, repository.config.value)
-            if (result.isSuccess) {
-                statusBannerMessage.value = "Perfil ${model.name} (${model.quantization.label}) selecionado."
-            } else {
-                statusBannerMessage.value = "Falha ao selecionar perfil: ${result.exceptionOrNull()?.message}"
+            try {
+                AppDiagnosticsLogger.info("MODEL", "Solicitação de carregamento recebida: ${model.fileName}")
+                repository.updateConfig { current ->
+                    val boundedCtx = current.contextLength.coerceAtMost(model.maxContextLength)
+                    current.copy(
+                        contextLength = boundedCtx,
+                        batchSize = current.batchSize.coerceAtMost(boundedCtx),
+                        maxTokens = current.maxTokens.coerceAtMost(boundedCtx)
+                    )
+                }
+                val result = runCatching { engine.loadModel(model, repository.config.value) }
+                    .getOrElse { Result.failure(it) }
+                val isActuallyReady = result.isSuccess &&
+                    engine.loadedModel.value?.id == model.id &&
+                    engine.engineState.value == EngineLifecycleState.READY
+                if (isActuallyReady) {
+                    AppDiagnosticsLogger.info("MODEL", "Estado confirmado: ${model.fileName} continua ativo e engine está READY.")
+                    statusBannerMessage.value = "${model.name} carregado e pronto para uso."
+                } else {
+                    val failure = result.exceptionOrNull()
+                    AppDiagnosticsLogger.error(
+                        "MODEL",
+                        "Carregamento não terminou com modelo ativo; estado=${engine.engineState.value}; loaded=${engine.loadedModel.value?.id}",
+                        failure
+                    )
+                    statusBannerMessage.value =
+                        "Falha ao carregar ${model.name}: ${failure?.message ?: "a engine não confirmou o modelo ativo"}"
+                }
+            } finally {
+                modelLoadInProgress = false
             }
         }
     }
 
     private fun handleUnloadModel() {
         viewModelScope.launch {
+            AppDiagnosticsLogger.info("MODEL", "Descarregamento solicitado pelo usuário.")
             generationJob?.cancel()
             engine.unloadModel()
-            statusBannerMessage.value = "Perfil descarregado."
+            statusBannerMessage.value = "Modelo descarregado da memória; cópia privada preservada."
         }
     }
 
     private fun handleImportGgufUri(uri: Uri) {
+        AppDiagnosticsLogger.info("IMPORT", "Usuário selecionou um arquivo GGUF pelo Storage Access Framework.")
         val permissionPersisted = runCatching {
             getApplication<Application>().contentResolver.takePersistableUriPermission(
                 uri,
@@ -287,25 +323,40 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
             )
         }.isSuccess
 
-        val parsed = hardwareInspector.inspectPickedGgufUri(uri)
+        val parsed = runCatching { hardwareInspector.inspectPickedGgufUri(uri) }
+            .onFailure { AppDiagnosticsLogger.error("IMPORT", "Falha ao ler metadados do GGUF escolhido", it) }
+            .getOrNull()
         if (parsed != null) {
             repository.registerPickedModel(parsed)
-            statusBannerMessage.value = if (permissionPersisted) {
-                "Arquivo ${parsed.fileName} vinculado (${parsed.fileSizeMb} MB)."
-            } else {
-                "Arquivo vinculado nesta sessão. O provedor não permitiu persistir o acesso ao arquivo."
-            }
+            AppDiagnosticsLogger.info(
+                "IMPORT",
+                "GGUF identificado: ${parsed.fileName}; ${parsed.fileSizeMb} MB; permissão persistida=$permissionPersisted"
+            )
+            statusBannerMessage.value =
+                "Preparando cópia privada de ${parsed.fileName} (${parsed.fileSizeMb} MB)."
             handleLoadModel(parsed)
         } else {
+            AppDiagnosticsLogger.error("IMPORT", "Não foi possível identificar o arquivo GGUF selecionado.")
             statusBannerMessage.value = "Não foi possível ler os metadados do arquivo GGUF selecionado."
         }
     }
 
     private fun handleRemoveImportedModel(modelId: String) {
-        if (engine.loadedModel.value?.id == modelId) {
-            handleUnloadModel()
+        val model = repository.models.value.firstOrNull { it.id == modelId } ?: return
+        viewModelScope.launch {
+            try {
+                if (engine.loadedModel.value?.id == modelId) {
+                    generationJob?.cancel()
+                    engine.unloadModel()
+                }
+                engine.removeStoredModel(model)
+                repository.removePickedModel(modelId)
+                statusBannerMessage.value = "Modelo removido do app e da lista."
+            } catch (failure: Throwable) {
+                AppDiagnosticsLogger.error("MODEL", "Falha ao remover modelo importado", failure)
+                statusBannerMessage.value = "Falha ao remover modelo: ${failure.message}"
+            }
         }
-        repository.removePickedModel(modelId)
     }
 
     private fun handleSendPrompt(overrideText: String?) {
@@ -450,6 +501,19 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    private fun handleExportDiagnostics() {
+        viewModelScope.launch {
+            try {
+                AppDiagnosticsLogger.info("DIAGNOSTICS", "Exportação solicitada na tela de configurações.")
+                val fileName = AppDiagnosticsLogger.exportToDownloads(getApplication())
+                statusBannerMessage.value = "Logs exportados: Downloads/LocalAI/$fileName"
+            } catch (failure: Throwable) {
+                AppDiagnosticsLogger.error("DIAGNOSTICS", "Falha ao exportar logs", failure)
+                statusBannerMessage.value = "Não foi possível exportar os logs: ${failure.message}"
+            }
+        }
+    }
+
     private fun handleStopGeneration() {
         viewModelScope.launch {
             engine.stopGeneration()
@@ -457,6 +521,10 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     override fun onCleared() {
+        AppDiagnosticsLogger.info(
+            "LIFECYCLE",
+            "ViewModel finalizado; handle nativo será liberado, mas o GGUF privado permanece salvo."
+        )
         generationJob?.cancel()
         if (engine is Closeable) {
             engine.close()

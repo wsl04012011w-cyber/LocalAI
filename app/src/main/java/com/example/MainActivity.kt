@@ -1,6 +1,7 @@
 package com.example
 
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -28,6 +29,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.data.AppDiagnosticsLogger
 import com.example.state.AppDestination
 import com.example.state.LlamaChatAction
 import com.example.state.LlamaChatViewModel
@@ -44,6 +46,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        AppDiagnosticsLogger.initialize(applicationContext)
+        AppDiagnosticsLogger.info("APP", "MainActivity criada; Android SDK=${android.os.Build.VERSION.SDK_INT}")
         setContent {
             LlamaLocalTheme(darkTheme = true) {
                 LlamaLocalApp()
