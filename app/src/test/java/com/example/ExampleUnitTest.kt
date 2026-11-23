@@ -2,7 +2,6 @@ package com.example
 
 import com.example.data.GgufRepository
 import com.example.domain.model.ChatMessage
-import com.example.domain.model.ChatTemplateFormat
 import com.example.domain.model.EngineLimits
 import com.example.domain.model.GgufModelSpec
 import com.example.domain.model.GgufQuantization
@@ -23,25 +22,10 @@ import org.junit.Test
 class ExampleUnitTest {
 
     @Test
-    fun promptFormatter_formatsChatMlAndLlama3Correctly() {
-        val messages = listOf(
-            ChatMessage(role = MessageRole.USER, content = "Olá GGUF")
-        )
-        val llama3Config = InferenceConfig(
-            chatTemplate = ChatTemplateFormat.LLAMA3,
-            systemPrompt = "Sys"
-        )
-        val llama3Prompt = PromptFormatter.formatPrompt(messages, llama3Config)
-        assertTrue(llama3Prompt.contains("<|begin_of_text|>"))
-        assertTrue(llama3Prompt.contains("<|start_header_id|>user<|end_header_id|>"))
-        assertTrue(llama3Prompt.endsWith("<|start_header_id|>assistant<|end_header_id|>\n\n"))
-
-        val chatMlPrompt = PromptFormatter.formatPrompt(
-            messages,
-            llama3Config.copy(chatTemplate = ChatTemplateFormat.CHATML)
-        )
-        assertTrue(chatMlPrompt.contains("<|im_start|>system"))
-        assertTrue(chatMlPrompt.endsWith("<|im_start|>assistant\n"))
+    fun promptFormatter_estimatesTokensForText() {
+        assertEquals(0, PromptFormatter.estimateTokens(""))
+        assertEquals(1, PromptFormatter.estimateTokens("Hi"))
+        assertEquals(3, PromptFormatter.estimateTokens("Hello world"))
     }
 
     @Test
@@ -83,7 +67,6 @@ class ExampleUnitTest {
             fileSizeMb = 900,
             estimatedRamMb = 1200,
             maxContextLength = 4096,
-            defaultTemplate = ChatTemplateFormat.CHATML,
             description = "Test slot"
         )
         val config = InferenceConfig(maxTokens = 24, threads = 4)
