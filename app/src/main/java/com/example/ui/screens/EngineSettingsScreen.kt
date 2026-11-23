@@ -23,7 +23,6 @@ import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -57,10 +56,6 @@ fun EngineSettingsScreen(
     val recommendedThreads = (maxCores / 2).coerceIn(2, maxCores)
     val maxModelCtx = uiState.loadedModel?.maxContextLength ?: 8192
 
-    val kvCacheMb = config.estimateKvCacheMb(uiState.loadedModel)
-    val modelRamMb = uiState.loadedModel?.estimatedRamMb ?: 0
-    val totalFootprintMb = modelRamMb + kvCacheMb
-    val ramUsageFraction = (totalFootprintMb.toFloat() / uiState.deviceMemory.availableRamMb.coerceAtLeast(1)).coerceIn(0f, 1f)
 
     Box(
         modifier = modifier.fillMaxSize(),
@@ -73,45 +68,6 @@ fun EngineSettingsScreen(
                 .widthIn(max = 720.dp)
                 .fillMaxSize()
         ) {
-            // Live Memory & KV-Cache Footprint Estimator
-            item {
-                SectionCard(title = "Orçamento de Memória (GGUF + KV Cache)") {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "Modelo: $modelRamMb MB + KV: $kvCacheMb MB",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "$totalFootprintMb / ${uiState.deviceMemory.availableRamMb} MB livre",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (ramUsageFraction > 0.85f) {
-                                MaterialTheme.colorScheme.tertiary
-                            } else {
-                                MaterialTheme.colorScheme.primary
-                            }
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    LinearProgressIndicator(
-                        progress = { ramUsageFraction },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(6.dp)
-                            .clip(RoundedCornerShape(3.dp)),
-                        color = if (ramUsageFraction > 0.85f) {
-                            MaterialTheme.colorScheme.tertiary
-                        } else {
-                            MaterialTheme.colorScheme.primary
-                        },
-                        trackColor = MaterialTheme.colorScheme.surfaceContainerHigh
-                    )
-                }
-            }
-
             // Selective Bounded Hardware & Context Controls
             item {
                 SectionCard(title = "Limites Seletivos de Hardware & Contexto") {
@@ -275,13 +231,8 @@ fun EngineSettingsScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     ToggleRow(
                         title = "Memory Lock (use_mlock)",
-                        subtitle = if (ramUsageFraction > 0.8f) {
-                            "Bloqueado com pouca folga de RAM para evitar OOM kill."
-                        } else {
-                            "Trava páginas na RAM evitando swap do kernel."
-                        },
+                        subtitle = "Solicita ao sistema manter as páginas do modelo na RAM. Pode aumentar a pressão de memória; o controle fica a seu critério.",
                         checked = config.useMlock,
-                        enabled = ramUsageFraction <= 0.8f || config.useMlock,
                         onCheckedChange = { onAction(LlamaChatAction.ToggleMlock(it)) }
                     )
                 }

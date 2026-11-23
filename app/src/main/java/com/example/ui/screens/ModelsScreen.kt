@@ -21,7 +21,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Download
@@ -29,7 +28,6 @@ import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -150,21 +148,21 @@ fun ModelsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "O app não bloqueia modelos pelo tamanho do arquivo ou por estimativa de RAM. A carga ainda depende da memória que o Android conseguir disponibilizar.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 
             items(uiState.models, key = { it.id }) { model ->
                 val isSelectedProfile = uiState.loadedModel?.id == model.id
-                val kvMb = uiState.config.estimateKvCacheMb(model)
-                val totalNeededMb = model.estimatedRamMb + kvMb
-                val fitsComfortably = totalNeededMb <= uiState.deviceMemory.availableRamMb
-
                 ModelSpecCard(
                     model = model,
                     isSelectedProfile = isSelectedProfile,
                     isBusy = uiState.isGenerating,
-                    estimatedTotalMb = totalNeededMb,
-                    fitsComfortably = fitsComfortably,
                     onDownload = { onAction(LlamaChatAction.DownloadModel(model)) },
                     onOpenRepo = {
                         model.repositoryUrl?.let { onAction(LlamaChatAction.OpenModelRepository(it)) }
@@ -286,8 +284,6 @@ private fun ModelSpecCard(
     model: GgufModelSpec,
     isSelectedProfile: Boolean,
     isBusy: Boolean,
-    estimatedTotalMb: Int,
-    fitsComfortably: Boolean,
     onDownload: () -> Unit,
     onOpenRepo: () -> Unit,
     onCopyUrl: () -> Unit,
@@ -376,92 +372,74 @@ private fun ModelSpecCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = if (fitsComfortably) {
-                        Icons.Rounded.CheckCircle
-                    } else {
-                        Icons.Rounded.WarningAmber
-                    },
-                    contentDescription = null,
-                    tint = if (fitsComfortably) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.tertiary
-                    },
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "RAM est. c/ KV: ~$estimatedTotalMb MB",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
             Spacer(modifier = Modifier.height(12.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (model.downloadUrl != null) {
                     Button(
                         onClick = onDownload,
                         modifier = Modifier
-                            .weight(1f)
+                            .fillMaxWidth()
                             .testTag("download_model_${model.id}")
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Download,
                             contentDescription = null,
-                            modifier = Modifier.size(17.dp)
+                            modifier = Modifier.size(18.dp)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Baixar .GGUF")
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Baixar .GGUF", maxLines = 1, softWrap = false)
                     }
                 }
 
-                OutlinedButton(
-                    onClick = onSelectProfile,
-                    enabled = !isBusy,
-                    modifier = Modifier.testTag("select_profile_${model.id}")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(if (isSelectedProfile) "Perfil Ativo" else "Usar Perfil")
-                }
-
-                if (model.downloadUrl != null) {
-                    IconButton(
-                        onClick = onCopyUrl,
+                    OutlinedButton(
+                        onClick = onSelectProfile,
+                        enabled = !isBusy,
                         modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .testTag("copy_url_${model.id}")
+                            .weight(1f)
+                            .testTag("select_profile_${model.id}")
                     ) {
-                        Icon(
-                            imageVector = Icons.Rounded.ContentCopy,
-                            contentDescription = "Copiar link de download",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        Text(
+                            if (isSelectedProfile) "Perfil Ativo" else "Usar Perfil",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
-                }
 
-                if (model.repositoryUrl != null) {
-                    IconButton(
-                        onClick = onOpenRepo,
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .testTag("open_repo_${model.id}")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.OpenInNew,
-                            contentDescription = "Abrir repositório Hugging Face",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    if (model.downloadUrl != null) {
+                        IconButton(
+                            onClick = onCopyUrl,
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("copy_url_${model.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.ContentCopy,
+                                contentDescription = "Copiar link de download",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    if (model.repositoryUrl != null) {
+                        IconButton(
+                            onClick = onOpenRepo,
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("open_repo_${model.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.OpenInNew,
+                                contentDescription = "Abrir repositório Hugging Face",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }
