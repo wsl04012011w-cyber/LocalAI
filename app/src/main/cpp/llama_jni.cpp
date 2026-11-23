@@ -2,11 +2,16 @@
 #include <android/log.h>
 
 #include "llama.h"
+#include "chat.h"
 
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <exception>
+#include <fstream>
+#include <cerrno>
+#include <cstring>
+#include <sys/stat.h>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -32,6 +37,14 @@ struct NativeEngine {
 
 bool abortCallback(void *) {
     return g_abortRequested.load();
+}
+
+void llamaAndroidLog(enum ggml_log_level level, const char * text, void *) {
+    int priority = ANDROID_LOG_INFO;
+    if (level == GGML_LOG_LEVEL_ERROR) priority = ANDROID_LOG_ERROR;
+    else if (level == GGML_LOG_LEVEL_WARN) priority = ANDROID_LOG_WARN;
+    else if (level == GGML_LOG_LEVEL_DEBUG) priority = ANDROID_LOG_DEBUG;
+    __android_log_write(priority, kLogTag, text == nullptr ? "" : text);
 }
 
 void throwJava(JNIEnv * env, const char * className, const std::string & message) {
@@ -292,6 +305,7 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeLoadModel(
 ) {
     try {
         std::call_once(g_backendInit, [] {
+            llama_log_set(llamaAndroidLog, nullptr);
             llama_backend_init();
         });
 
@@ -300,8 +314,21 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeLoadModel(
         }
 
         const std::string path = javaStringToUtf8(env, fileDescriptorPath);
-        if (path.empty()) {
-            throw std::runtime_error("The GGUF file descriptor path is empty.");
+        if (path.empty()) throw std::runtime_error("The GGUF model path is empty.");
+
+        struct stat fileInfo {};
+        if (stat(path.c_str(), &fileInfo) != 0) {
+            throw std::runtime_error("Cannot access prepared GGUF file: " + std::string(std::strerror(errno)));
+        }
+        if (!S_ISREG(fileInfo.st_mode) || fileInfo.st_size < 4) {
+            throw std::runtime_error("The selected GGUF is not a readable regular file.");
+        }
+        std::ifstream headerFile(path, std::ios::binary);
+        char magic[4] = {};
+        headerFile.read(magic, sizeof(magic));
+        if (headerFile.gcount() != static_cast<std::streamsize>(sizeof(magic)) ||
+            std::memcmp(magic, "GGUF", sizeof(magic)) != 0) {
+            throw std::runtime_error("The selected file does not have a valid GGUF header.");
         }
 
         llama_model_params modelParams = llama_model_default_params();
@@ -322,7 +349,7 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeLoadModel(
         engine->model = llama_model_load_from_file(path.c_str(), modelParams);
         if (engine->model == nullptr) {
             throw std::runtime_error(
-                "llama.cpp could not load this GGUF. Check the file, available RAM and model compatibility."
+                "llama.cpp rejected the GGUF after header validation. Check Logcat (LocalAI-llama) for model, tensor or memory details."
             );
         }
 
@@ -334,6 +361,70 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeLoadModel(
     } catch (...) {
         throwJava(env, "java/lang/IllegalStateException", "Unknown native model-loading error.");
         return 0;
+    }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_example_engine_JniLlamaEngineAdapter_nativeFormatPrompt(
+    JNIEnv * env,
+    jobject /* thiz */,
+    jlong handle,
+    jobjectArray roles,
+    jobjectArray contents
+) {
+    auto * engine = reinterpret_cast<NativeEngine *>(handle);
+    if (engine == nullptr || engine->model == nullptr) {
+        throwJava(env, "java/lang/IllegalStateException", "No GGUF model is loaded for Jinja formatting.");
+        return nullptr;
+    }
+    if (roles == nullptr || contents == nullptr ||
+        env->GetArrayLength(roles) != env->GetArrayLength(contents)) {
+        throwJava(env, "java/lang/IllegalArgumentException", "Chat roles and contents must have matching lengths.");
+        return nullptr;
+    }
+
+    std::lock_guard<std::mutex> lock(engine->generationMutex);
+    try {
+        const char * embeddedTemplate = llama_model_chat_template(engine->model, nullptr);
+        if (embeddedTemplate == nullptr || embeddedTemplate[0] == 0) {
+            throw std::runtime_error("This GGUF does not contain tokenizer.chat_template.");
+        }
+
+        const jsize messageCount = env->GetArrayLength(roles);
+        common_chat_templates_ptr templates = common_chat_templates_init(engine->model, "");
+        common_chat_templates_inputs inputs;
+        inputs.use_jinja = true;
+        inputs.add_generation_prompt = true;
+        inputs.messages.reserve(static_cast<size_t>(messageCount));
+
+        for (jsize i = 0; i < messageCount; ++i) {
+            auto roleObject = static_cast<jstring>(env->GetObjectArrayElement(roles, i));
+            auto contentObject = static_cast<jstring>(env->GetObjectArrayElement(contents, i));
+            if (roleObject == nullptr || contentObject == nullptr) {
+                if (roleObject != nullptr) env->DeleteLocalRef(roleObject);
+                if (contentObject != nullptr) env->DeleteLocalRef(contentObject);
+                throw std::runtime_error("Chat message role or content is null.");
+            }
+            common_chat_msg message;
+            message.role = javaStringToUtf8(env, roleObject);
+            message.content = javaStringToUtf8(env, contentObject);
+            env->DeleteLocalRef(roleObject);
+            env->DeleteLocalRef(contentObject);
+            if (env->ExceptionCheck()) return nullptr;
+            inputs.messages.emplace_back(std::move(message));
+        }
+
+        common_chat_params formatted = common_chat_templates_apply(templates.get(), inputs);
+        const std::string prompt = formatted.prompt.str();
+        if (prompt.empty()) throw std::runtime_error("The GGUF Jinja template rendered an empty prompt.");
+        return newJavaString(env, prompt);
+    } catch (const std::exception & error) {
+        __android_log_print(ANDROID_LOG_ERROR, kLogTag, "Jinja template failed: %s", error.what());
+        throwJava(env, "java/lang/IllegalStateException", error.what());
+        return nullptr;
+    } catch (...) {
+        throwJava(env, "java/lang/IllegalStateException", "Unknown GGUF Jinja template error.");
+        return nullptr;
     }
 }
 

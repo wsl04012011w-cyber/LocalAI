@@ -3,7 +3,8 @@ package com.example.engine
 import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
-import android.os.ParcelFileDescriptor
+import java.io.File
+import java.io.FileOutputStream
 import com.example.domain.model.ChatMessage
 import com.example.domain.model.EngineTelemetry
 import com.example.domain.model.GgufModelSpec
@@ -14,6 +15,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,12 +26,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.Closeable
+import kotlin.coroutines.coroutineContext
 
 /**
- * JNI-backed inference adapter for the llama.cpp v1.0.0 C API.
- *
- * The descriptor stays open while the model is loaded because llama.cpp may
- * memory-map /proc/self/fd/<fd> for the lifetime of the native model.
+ * JNI-backed inference adapter for llama.cpp.
+ * SAF providers can expose pipes or non-seekable descriptors, so imported GGUF
+ * files are staged as regular cache files for reliable random access/mmap.
  */
 class JniLlamaEngineAdapter(
     private val context: Context
@@ -42,7 +44,7 @@ class JniLlamaEngineAdapter(
     @Volatile
     private var nativeHandle: Long = 0L
 
-    private var modelDescriptor: ParcelFileDescriptor? = null
+    private var stagedModelFile: File? = null
 
     private val _engineState = MutableStateFlow(EngineLifecycleState.UNLOADED)
     override val engineState: StateFlow<EngineLifecycleState> = _engineState.asStateFlow()
@@ -87,14 +89,12 @@ class JniLlamaEngineAdapter(
                 )
             }
 
-            var openedDescriptor: ParcelFileDescriptor? = null
+            var copiedFile: File? = null
             try {
-                openedDescriptor = context.contentResolver.openFileDescriptor(modelUri, "r")
-                    ?: throw IllegalStateException("Não foi possível abrir o arquivo GGUF selecionado.")
-
-                val fdPath = "/proc/self/fd/${openedDescriptor.fd}"
+                val staged = stageModelFile(modelUri, model)
+                copiedFile = staged.cacheFile
                 val handle = nativeLoadModel(
-                    fdPath,
+                    staged.path,
                     config.gpuLayers,
                     config.useMmap,
                     config.useMlock
@@ -102,8 +102,8 @@ class JniLlamaEngineAdapter(
                 check(handle != 0L) { "llama.cpp não retornou um handle de modelo válido." }
 
                 nativeHandle = handle
-                modelDescriptor = openedDescriptor
-                openedDescriptor = null
+                stagedModelFile = copiedFile
+                copiedFile = null
 
                 _loadedModel.value = model
                 val kvCacheMb = config.estimateKvCacheMb(model)
@@ -114,11 +114,11 @@ class JniLlamaEngineAdapter(
                 _engineState.value = EngineLifecycleState.READY
                 Result.success(Unit)
             } catch (cancelled: CancellationException) {
-                runCatching { openedDescriptor?.close() }
+                runCatching { copiedFile?.delete() }
                 _engineState.value = EngineLifecycleState.ERROR
                 throw cancelled
             } catch (failure: Throwable) {
-                runCatching { openedDescriptor?.close() }
+                runCatching { copiedFile?.delete() }
                 _engineState.value = EngineLifecycleState.ERROR
                 Result.failure(failure)
             }
@@ -152,13 +152,13 @@ class JniLlamaEngineAdapter(
         }
 
         val producer = this
-        val prompt = PromptFormatter.formatPrompt(messages, config)
         val generationJob = launch(nativeDispatcher) {
             // Reset only after this generation reaches the serialized native queue.
             nativeResetStop()
             var promptTokenCount = 0
             _engineState.value = EngineLifecycleState.GENERATING
             try {
+                val prompt = formatPromptWithModelTemplate(handle, messages, config)
                 nativeGenerate(
                     handle = handle,
                     prompt = prompt,
@@ -257,6 +257,13 @@ class JniLlamaEngineAdapter(
         }
     }
 
+    override fun formatPromptPreview(messages: List<ChatMessage>, config: InferenceConfig): String {
+        val handle = nativeHandle
+        if (handle == 0L) return "Selecione e carregue um GGUF para renderizar o template Jinja do modelo."
+        return runCatching { formatPromptWithModelTemplate(handle, messages, config) }
+            .getOrElse { failure -> "Falha ao renderizar tokenizer.chat_template: ${failure.message ?: "template inválido"}" }
+    }
+
     override suspend fun stopGeneration() {
         nativeRequestStop()
     }
@@ -283,9 +290,9 @@ class JniLlamaEngineAdapter(
             nativeFreeModel(handle)
         }
 
-        val descriptor = modelDescriptor
-        modelDescriptor = null
-        runCatching { descriptor?.close() }
+        val cachedFile = stagedModelFile
+        stagedModelFile = null
+        runCatching { cachedFile?.delete() }
         _loadedModel.value = null
     }
 
@@ -293,6 +300,78 @@ class JniLlamaEngineAdapter(
      * Imported models use their SAF Uri. Catalog models use the content Uri
      * from a completed Android DownloadManager task.
      */
+    private data class StagedModelFile(val path: String, val cacheFile: File?)
+
+    private suspend fun stageModelFile(uri: Uri, model: GgufModelSpec): StagedModelFile {
+        if (uri.scheme == "file") {
+            val direct = uri.path?.let(::File)
+            if (direct != null && direct.isFile && direct.length() > 0L) {
+                return StagedModelFile(direct.absolutePath, null)
+            }
+        }
+
+        val cacheDirectory = File(context.cacheDir, "gguf-models")
+        if (!cacheDirectory.exists() && !cacheDirectory.mkdirs()) {
+            throw IllegalStateException("Não foi possível criar a pasta temporária para o GGUF.")
+        }
+        val fileKey = model.id.hashCode().toUInt().toString(16)
+        val target = File(cacheDirectory, "model_$fileKey.gguf")
+        val partial = File(cacheDirectory, "model_$fileKey.part")
+        runCatching { partial.delete() }
+        runCatching { target.delete() }
+
+        try {
+            val input = context.contentResolver.openInputStream(uri)
+                ?: throw IllegalStateException("O provedor SAF não abriu o arquivo GGUF para leitura.")
+            input.use { source ->
+                FileOutputStream(partial).buffered().use { output ->
+                    source.buffered().use { bufferedSource ->
+                        val buffer = ByteArray(1024 * 1024)
+                        while (true) {
+                            coroutineContext.ensureActive()
+                            val count = bufferedSource.read(buffer)
+                            if (count < 0) break
+                            output.write(buffer, 0, count)
+                        }
+                    }
+                }
+            }
+            if (partial.length() < 4L) throw IllegalStateException("O arquivo selecionado está vazio ou incompleto.")
+            if (!partial.renameTo(target)) throw IllegalStateException("Não foi possível finalizar a cópia temporária do GGUF.")
+            return StagedModelFile(target.absolutePath, target)
+        } catch (failure: Throwable) {
+            runCatching { partial.delete() }
+            runCatching { target.delete() }
+            if (failure is CancellationException) throw failure
+            throw IllegalStateException(
+                "Falha ao preparar o arquivo SAF para acesso aleatório: ${failure.message ?: failure.javaClass.simpleName}",
+                failure
+            )
+        }
+    }
+
+    private fun formatPromptWithModelTemplate(
+        handle: Long,
+        messages: List<ChatMessage>,
+        config: InferenceConfig
+    ): String {
+        val roles = ArrayList<String>(messages.size + 1)
+        val contents = ArrayList<String>(messages.size + 1)
+        if (config.systemPrompt.isNotBlank()) {
+            roles += "system"
+            contents += config.systemPrompt.trim()
+        }
+        messages.filter { it.content.isNotBlank() }.forEach { message ->
+            roles += when (message.role) {
+                com.example.domain.model.MessageRole.USER -> "user"
+                com.example.domain.model.MessageRole.ASSISTANT -> "assistant"
+                com.example.domain.model.MessageRole.SYSTEM -> "system"
+            }
+            contents += message.content.trim()
+        }
+        return nativeFormatPrompt(handle, roles.toTypedArray(), contents.toTypedArray())
+    }
+
     private fun resolveModelUri(model: GgufModelSpec): Uri? {
         model.uriString?.let { value ->
             return runCatching { Uri.parse(value) }.getOrNull()
@@ -345,11 +424,17 @@ class JniLlamaEngineAdapter(
     }
 
     private external fun nativeLoadModel(
-        fileDescriptorPath: String,
+        modelPath: String,
         gpuLayers: Int,
         useMmap: Boolean,
         useMlock: Boolean
     ): Long
+
+    private external fun nativeFormatPrompt(
+        handle: Long,
+        roles: Array<String>,
+        contents: Array<String>
+    ): String
 
     private external fun nativeFreeModel(handle: Long)
     private external fun nativeRequestStop()

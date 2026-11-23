@@ -97,7 +97,10 @@ class StubLlamaEngineAdapter : LocalInferenceEngine {
         cancelRequested.set(false)
         _engineState.value = EngineLifecycleState.GENERATING
 
-        val formattedPrompt = PromptFormatter.formatPrompt(messages, config)
+        val formattedPrompt = buildString {
+            if (config.systemPrompt.isNotBlank()) appendLine("system: ${config.systemPrompt}")
+            messages.filter { it.content.isNotBlank() }.forEach { appendLine("${it.role.name.lowercase()}: ${it.content}") }
+        }
         val promptTokens = PromptFormatter.estimateTokens(formattedPrompt)
         val kvMb = config.estimateKvCacheMb(activeModel)
 
@@ -205,6 +208,14 @@ class StubLlamaEngineAdapter : LocalInferenceEngine {
         }
     }.flowOn(Dispatchers.Default)
 
+    override fun formatPromptPreview(messages: List<ChatMessage>, config: InferenceConfig): String =
+        buildString {
+            if (config.systemPrompt.isNotBlank()) appendLine("system: ${config.systemPrompt}")
+            messages.filter { it.content.isNotBlank() }.forEach {
+                appendLine("${it.role.name.lowercase()}: ${it.content}")
+            }
+        }
+
     override suspend fun stopGeneration() {
         cancelRequested.set(true)
     }
@@ -232,7 +243,7 @@ class StubLlamaEngineAdapter : LocalInferenceEngine {
         return buildString {
             appendLine("[Modo Arquitetura • Stub llama.cpp]")
             appendLine()
-            appendLine("Pipeline de streaming ativo sem bibliotecas externas de rede. O prompt \"$promptPreview\" foi serializado no template **${config.chatTemplate.displayName}** ($promptTokens tokens estimados).")
+            appendLine("Pipeline de streaming ativo sem bibliotecas externas de rede. O prompt \"$promptPreview\" foi serializado no template Jinja embutido no GGUF ($promptTokens tokens estimados).")
             appendLine()
             appendLine("Configuração propagada para o contrato `LocalInferenceEngine`:")
             appendLine("```cpp")

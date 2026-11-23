@@ -5,7 +5,6 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
-import com.example.domain.model.ChatTemplateFormat
 import com.example.domain.model.DeviceMemoryInfo
 import com.example.domain.model.GgufModelSpec
 import com.example.domain.model.GgufQuantization
@@ -62,7 +61,6 @@ class DeviceHardwareInspector(private val context: Context) {
             1500
         }
         val detectedQuant = detectQuantFromFilename(displayName)
-        val detectedTemplate = detectTemplateFromFilename(displayName)
         val cleanName = displayName.removeSuffix(".gguf").replace('-', ' ').replace('_', ' ')
 
         return GgufModelSpec(
@@ -75,7 +73,6 @@ class DeviceHardwareInspector(private val context: Context) {
             fileSizeMb = sizeMb,
             estimatedRamMb = (sizeMb * 1.18f).toInt(),
             maxContextLength = 8192,
-            defaultTemplate = detectedTemplate,
             uriString = uri.toString(),
             origin = ModelOrigin.DEVICE_STORAGE,
             description = "Arquivo GGUF vinculado via Storage Access Framework (SAF) pronto para fd/mmap."
@@ -86,16 +83,6 @@ class DeviceHardwareInspector(private val context: Context) {
         val upper = name.uppercase()
         return GgufQuantization.entries.firstOrNull { upper.contains(it.name) }
             ?: GgufQuantization.Q4_K_M
-    }
-
-    private fun detectTemplateFromFilename(name: String): ChatTemplateFormat {
-        val lower = name.lowercase()
-        return when {
-            lower.contains("qwen") -> ChatTemplateFormat.CHATML
-            lower.contains("gemma") -> ChatTemplateFormat.GEMMA
-            lower.contains("phi") -> ChatTemplateFormat.PHI3
-            else -> ChatTemplateFormat.LLAMA3
-        }
     }
 
     private fun inferArchitecture(name: String): String {

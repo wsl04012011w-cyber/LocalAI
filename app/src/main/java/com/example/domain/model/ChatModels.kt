@@ -50,16 +50,6 @@ enum class GgufQuantization(
     F16("F16", 16.0f, "Precisão total (referência)")
 }
 
-enum class ChatTemplateFormat(
-    val displayName: String,
-    val stopToken: String
-) {
-    LLAMA3("Llama 3 / 3.2", "<|eot_id|>"),
-    CHATML("ChatML (Qwen)", "<|im_end|>"),
-    GEMMA("Gemma 2 / 3", "<end_of_turn>"),
-    PHI3("Phi-3.5 / 4", "<|end|>")
-}
-
 enum class KvCacheQuant(
     val label: String,
     val bytesPerElement: Float
@@ -84,7 +74,6 @@ data class GgufModelSpec(
     val fileSizeMb: Int,
     val estimatedRamMb: Int,
     val maxContextLength: Int,
-    val defaultTemplate: ChatTemplateFormat,
     val downloadUrl: String? = null,
     val repositoryUrl: String? = null,
     val uriString: String? = null,
@@ -121,7 +110,6 @@ data class InferenceConfig(
     val topK: Int = 40,
     val repeatPenalty: Float = 1.1f,
     val maxTokens: Int = 512,
-    val chatTemplate: ChatTemplateFormat = ChatTemplateFormat.LLAMA3,
     val systemPrompt: String = "Você é um assistente de IA local executado diretamente no dispositivo via llama.cpp. Responda de forma clara, objetiva e técnica."
 ) {
     /**

@@ -36,7 +36,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import com.example.domain.model.ChatTemplateFormat
 import com.example.domain.model.EngineLimits
 import com.example.domain.model.KvCacheQuant
 import com.example.state.LlamaChatAction
@@ -310,24 +309,15 @@ fun EngineSettingsScreen(
                 }
             }
 
-            // Prompt Template & System Prompt
+            // Embedded GGUF Jinja template & System Prompt
             item {
-                SectionCard(title = "Template de Chat & System Prompt") {
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        ChatTemplateFormat.entries.forEach { format ->
-                            FilterChip(
-                                selected = config.chatTemplate == format,
-                                onClick = { onAction(LlamaChatAction.UpdateChatTemplate(format)) },
-                                label = { Text(format.displayName) }
-                            )
-                        }
-                    }
-
+                SectionCard(title = "Jinja do Modelo & System Prompt") {
+                    Text(
+                        text = "O formato das mensagens vem de tokenizer.chat_template dentro do GGUF. O app usa esse template automaticamente e não aplica templates fixos.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Spacer(modifier = Modifier.height(10.dp))
-
                     OutlinedTextField(
                         value = config.systemPrompt,
                         onValueChange = { onAction(LlamaChatAction.UpdateSystemPrompt(it)) },
@@ -335,18 +325,12 @@ fun EngineSettingsScreen(
                         minLines = 3,
                         maxLines = 6,
                         shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("system_prompt_input")
+                        modifier = Modifier.fillMaxWidth().testTag("system_prompt_input")
                     )
-
                     Spacer(modifier = Modifier.height(12.dp))
-
                     OutlinedButton(
                         onClick = { onAction(LlamaChatAction.ResetDefaultConfig) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("reset_engine_config_button")
+                        modifier = Modifier.fillMaxWidth().testTag("reset_engine_config_button")
                     ) {
                         Text("Restaurar Padrões Otimizados")
                     }

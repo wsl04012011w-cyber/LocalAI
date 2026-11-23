@@ -65,7 +65,7 @@ fun PromptInspectorSheet(
                         style = MaterialTheme.typography.titleLarge
                     )
                     Text(
-                        text = "Template: ${uiState.config.chatTemplate.displayName} • ~$tokenEstimate tokens",
+                        text = "Jinja do GGUF • ~$tokenEstimate tokens",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -87,7 +87,7 @@ fun PromptInspectorSheet(
             Spacer(modifier = Modifier.height(14.dp))
 
             Text(
-                text = "Payload serializado para llama_tokenize()",
+                text = "Prompt renderizado com tokenizer.chat_template do modelo",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

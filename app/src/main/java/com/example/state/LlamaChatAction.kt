@@ -1,7 +1,6 @@
 package com.example.state
 
 import android.net.Uri
-import com.example.domain.model.ChatTemplateFormat
 import com.example.domain.model.GgufModelSpec
 import com.example.domain.model.KvCacheQuant
 
@@ -41,7 +40,6 @@ sealed interface LlamaChatAction {
     data class UpdateTopK(val topK: Int) : LlamaChatAction
     data class UpdateRepeatPenalty(val penalty: Float) : LlamaChatAction
     data class UpdateMaxTokens(val maxTokens: Int) : LlamaChatAction
-    data class UpdateChatTemplate(val format: ChatTemplateFormat) : LlamaChatAction
     data class UpdateSystemPrompt(val prompt: String) : LlamaChatAction
     data object ResetDefaultConfig : LlamaChatAction
 }

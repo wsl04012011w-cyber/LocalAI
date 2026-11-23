@@ -5,7 +5,7 @@ A engine JNI está integrada ao app Android. A dependência nativa usa o tag fix
 ## Implementado
 
 - JniLlamaEngineAdapter implementa LocalInferenceEngine e substitui o stub no LlamaChatViewModel.
-- O modelo GGUF é aberto pelo Android ContentResolver. O ParcelFileDescriptor permanece aberto até llama_model_free, permitindo que o llama.cpp use /proc/self/fd/<fd> sem copiar o arquivo selecionado pelo SAF.
+- Arquivos selecionados via SAF são copiados para um arquivo regular temporário no cache do app, garantindo acesso aleatório/mmap mesmo quando o provedor fornece pipes ou descritores não seekable. O arquivo temporário é mantido enquanto o modelo está carregado e removido ao descarregar.
 - A permissão de leitura do SAF é persistida quando o provedor permite.
 - Modelos do catálogo são resolvidos pela URI de um download concluído no Android DownloadManager; modelos importados usam sua URI SAF.
 - A ponte JNI carrega e libera o modelo, cria o contexto, tokeniza o prompt, faz prefill em lotes, executa sampling autoregressivo e envia tokens em streaming.
@@ -29,4 +29,4 @@ O workflow usa Gradle 9.3.1 diretamente porque este repositório ainda não vers
 - O backend incluído é CPU arm64-v8a; Vulkan e OpenCL ainda não estão habilitados.
 - CI confirma compilação e testes JVM, mas não substitui teste de inferência em dispositivo ARM64 com um arquivo GGUF real.
 - Sessões e configurações continuam em memória no GgufRepository; persistência Room/DataStore não faz parte desta integração.
-- O formatter Kotlin continua fornecendo os templates Llama 3, ChatML, Gemma e Phi-3. O uso automático dos templates embutidos nos metadados GGUF permanece como melhoria futura.
+- A renderização do prompt usa o template Jinja `tokenizer.chat_template` embutido no GGUF através do runtime Jinja/minja do `llama.cpp` (`llama-common`). Não há seleção de templates fixos por nome de arquivo.

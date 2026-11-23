@@ -62,6 +62,8 @@ interface LocalInferenceEngine {
 
     suspend fun loadModel(model: GgufModelSpec, config: InferenceConfig): Result<Unit>
     suspend fun unloadModel()
+    fun formatPromptPreview(messages: List<ChatMessage>, config: InferenceConfig): String =
+        "Carregue um modelo GGUF para visualizar o prompt Jinja embutido."
     fun streamCompletion(
         messages: List<ChatMessage>,
         config: InferenceConfig

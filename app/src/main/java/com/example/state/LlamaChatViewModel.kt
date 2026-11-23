@@ -211,17 +211,10 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
             is LlamaChatAction.UpdateMaxTokens -> repository.updateConfig { current ->
                 current.copy(maxTokens = action.maxTokens.coerceIn(128, current.contextLength))
             }
-            is LlamaChatAction.UpdateChatTemplate -> repository.updateConfig { it.copy(chatTemplate = action.format) }
             is LlamaChatAction.UpdateSystemPrompt -> repository.updateConfig { it.copy(systemPrompt = action.prompt) }
             LlamaChatAction.ResetDefaultConfig -> {
                 val safeThreads = (deviceMemory.value.cpuCores / 2).coerceIn(2, 6)
-                val activeTemplate = engine.loadedModel.value?.defaultTemplate ?: repository.config.value.chatTemplate
-                repository.updateConfig {
-                    InferenceConfig(
-                        threads = safeThreads,
-                        chatTemplate = activeTemplate
-                    )
-                }
+                repository.updateConfig { InferenceConfig(threads = safeThreads) }
                 statusBannerMessage.value = "Parâmetros restaurados dentro dos limites do dispositivo."
             }
         }
@@ -230,7 +223,7 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
     fun buildFormattedPromptPreview(): String {
         val state = uiState.value
         val messages = state.activeSession?.messages.orEmpty()
-        return PromptFormatter.formatPrompt(messages, state.config)
+        return engine.formatPromptPreview(messages, state.config)
     }
 
     private fun handleDownloadModel(model: GgufModelSpec) {
@@ -264,7 +257,6 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
             repository.updateConfig { current ->
                 val boundedCtx = current.contextLength.coerceAtMost(model.maxContextLength)
                 current.copy(
-                    chatTemplate = model.defaultTemplate,
                     contextLength = boundedCtx,
                     batchSize = current.batchSize.coerceAtMost(boundedCtx),
                     maxTokens = current.maxTokens.coerceAtMost(boundedCtx)
@@ -344,7 +336,6 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
             val defaultModel = repository.models.value.firstOrNull()
             if (defaultModel != null) {
                 viewModelScope.launch {
-                    repository.updateConfig { it.copy(chatTemplate = defaultModel.defaultTemplate) }
                     val res = engine.loadModel(defaultModel, repository.config.value)
                     if (res.isSuccess) {
                         startStreamingResponse(sessionId)

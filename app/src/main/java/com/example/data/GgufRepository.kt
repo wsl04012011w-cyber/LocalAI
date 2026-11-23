@@ -1,7 +1,6 @@
 package com.example.data
 
 import com.example.domain.model.ChatMessage
-import com.example.domain.model.ChatTemplateFormat
 import com.example.domain.model.ConversationSession
 import com.example.domain.model.GgufModelSpec
 import com.example.domain.model.GgufQuantization
@@ -121,7 +120,6 @@ class GgufRepository(defaultThreads: Int) {
             fileSizeMb = 986,
             estimatedRamMb = 1280,
             maxContextLength = 8192,
-            defaultTemplate = ChatTemplateFormat.CHATML,
             downloadUrl = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf?download=true",
             repositoryUrl = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF",
             description = "Compacto e rápido para smartphones de 4–6 GB RAM."
@@ -136,7 +134,6 @@ class GgufRepository(defaultThreads: Int) {
             fileSizeMb = 2019,
             estimatedRamMb = 2480,
             maxContextLength = 8192,
-            defaultTemplate = ChatTemplateFormat.LLAMA3,
             downloadUrl = "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf?download=true",
             repositoryUrl = "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF",
             description = "Equilíbrio ideal entre qualidade e uso de RAM em aparelhos de 6–8 GB."
@@ -151,7 +148,6 @@ class GgufRepository(defaultThreads: Int) {
             fileSizeMb = 1420,
             estimatedRamMb = 1790,
             maxContextLength = 8192,
-            defaultTemplate = ChatTemplateFormat.GEMMA,
             downloadUrl = "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-IQ4_XS.gguf?download=true",
             repositoryUrl = "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF",
             description = "Quantização IQ4_XS otimizada para largura de banda móvel."
@@ -166,7 +162,6 @@ class GgufRepository(defaultThreads: Int) {
             fileSizeMb = 2390,
             estimatedRamMb = 2900,
             maxContextLength = 4096,
-            defaultTemplate = ChatTemplateFormat.PHI3,
             downloadUrl = "https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf?download=true",
             repositoryUrl = "https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF",
             description = "Modelo denso focado em lógica e instruções estruturadas."
