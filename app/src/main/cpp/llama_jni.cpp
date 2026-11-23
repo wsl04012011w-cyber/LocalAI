@@ -28,7 +28,7 @@ constexpr jint kFinishStopped = 2;
 constexpr jint kFinishContextFull = 3;
 
 std::once_flag g_backendInit;
-std::atomic<bool> g_abortRequested{false};
+std::atomic<jlong> g_stopGenerationId{0};
 std::mutex g_logFileMutex;
 std::string g_logFilePath;
 
@@ -37,8 +37,12 @@ struct NativeEngine {
     std::mutex generationMutex;
 };
 
-bool abortCallback(void *) {
-    return g_abortRequested.load();
+struct NativeAbortContext { jlong generationId; };
+
+bool abortCallback(void * userData) {
+    const auto * abortContext = static_cast<const NativeAbortContext *>(userData);
+    return abortContext != nullptr &&
+        g_stopGenerationId.load(std::memory_order_relaxed) == abortContext->generationId;
 }
 
 void llamaAndroidLog(enum ggml_log_level level, const char * text, void *) {
@@ -60,6 +64,10 @@ void llamaAndroidLog(enum ggml_log_level level, const char * text, void *) {
             if (length > 0 && message[length - 1] != '\n') file << '\n';
         }
     }
+}
+
+void logNativeMessage(enum ggml_log_level level, const std::string & message) {
+    llamaAndroidLog(level, message.c_str(), nullptr);
 }
 void throwJava(JNIEnv * env, const char * className, const std::string & message) {
     jclass exceptionClass = env->FindClass(className);
@@ -461,7 +469,6 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeFreeModel(
         return;
     }
 
-    g_abortRequested.store(true);
     std::lock_guard<std::mutex> lock(engine->generationMutex);
     if (engine->model != nullptr) {
         llama_model_free(engine->model);
@@ -473,17 +480,13 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeFreeModel(
 extern "C" JNIEXPORT void JNICALL
 Java_com_example_engine_JniLlamaEngineAdapter_nativeRequestStop(
     JNIEnv * /* env */,
-    jobject /* thiz */
+    jobject /* thiz */,
+    jlong generationId
 ) {
-    g_abortRequested.store(true);
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_example_engine_JniLlamaEngineAdapter_nativeResetStop(
-    JNIEnv * /* env */,
-    jobject /* thiz */
-) {
-    g_abortRequested.store(false);
+    if (generationId > 0) {
+        g_stopGenerationId.store(generationId, std::memory_order_relaxed);
+        logNativeMessage(GGML_LOG_LEVEL_INFO, "Stop requested for generation " + std::to_string(static_cast<long long>(generationId)));
+    }
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -499,6 +502,7 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
     JNIEnv * env,
     jobject /* thiz */,
     jlong handle,
+    jlong generationId,
     jstring promptValue,
     jint contextLength,
     jint batchSize,
@@ -542,6 +546,7 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
     }
 
     std::lock_guard<std::mutex> generationLock(engine->generationMutex);
+    logNativeMessage(GGML_LOG_LEVEL_INFO, "Generation " + std::to_string(static_cast<long long>(generationId)) + " started");
 
     const auto reportError = [&](const std::string & message) {
         invokeError(env, callback, onError, message);
@@ -564,19 +569,26 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
         );
         const int32_t safeThreads = std::max(1, static_cast<int32_t>(threads));
         const int32_t safeMaxTokens = std::max(1, static_cast<int32_t>(maxTokens));
+        const uint32_t safeMicroBatch = std::min<uint32_t>(64, safeBatch);
+        logNativeMessage(GGML_LOG_LEVEL_INFO,
+            "Generation " + std::to_string(static_cast<long long>(generationId)) +
+            " params: n_ctx=" + std::to_string(safeContext) +
+            " n_batch=" + std::to_string(safeBatch) +
+            " n_ubatch=" + std::to_string(safeMicroBatch) +
+            " threads=" + std::to_string(safeThreads) +
+            " max_tokens=" + std::to_string(safeMaxTokens));
 
         llama_context_params contextParams = llama_context_default_params();
         contextParams.n_ctx = safeContext;
         contextParams.n_batch = safeBatch;
-        contextParams.n_ubatch = contextParams.n_ubatch == 0
-            ? safeBatch
-            : std::min(contextParams.n_ubatch, safeBatch);
+        contextParams.n_ubatch = safeMicroBatch;
         contextParams.n_threads = safeThreads;
         contextParams.n_threads_batch = safeThreads;
         contextParams.type_k = static_cast<ggml_type>(kvCacheType);
         contextParams.type_v = static_cast<ggml_type>(kvCacheType);
+        NativeAbortContext abortContext{generationId};
         contextParams.abort_callback = abortCallback;
-        contextParams.abort_callback_data = nullptr;
+        contextParams.abort_callback_data = &abortContext;
         contextParams.no_perf = false;
 
         std::unique_ptr<llama_context, decltype(&llama_free)> inferenceContext(
@@ -607,6 +619,9 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
             throw std::runtime_error("Prompt tokenization overflowed.");
         }
         const int32_t promptTokenCount = requiredTokens < 0 ? -requiredTokens : requiredTokens;
+        logNativeMessage(GGML_LOG_LEVEL_INFO,
+            "Generation " + std::to_string(static_cast<long long>(generationId)) +
+            " prompt tokenized: " + std::to_string(promptTokenCount) + " tokens");
         if (promptTokenCount <= 0) {
             throw std::runtime_error("The formatted prompt did not produce any tokens.");
         }
@@ -641,7 +656,10 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
         // Prefill the prompt in n_batch-sized chunks.
         const int64_t promptEvalStartUs = llama_time_us();
         for (int32_t offset = 0; offset < promptTokenCount;) {
-            if (g_abortRequested.load()) {
+            if (g_stopGenerationId.load(std::memory_order_relaxed) == generationId) {
+                logNativeMessage(GGML_LOG_LEVEL_WARN,
+                    "Generation " + std::to_string(static_cast<long long>(generationId)) +
+                    " interrupted before prompt prefill completed; no output tokens generated.");
                 env->CallVoidMethod(
                     callback, onCompleted, kFinishStopped, 0, 0.0f, static_cast<jlong>(0)
                 );
@@ -678,7 +696,10 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
                 inferenceContext.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()
             );
             if (decodeResult != 0) {
-                if (g_abortRequested.load()) {
+                if (g_stopGenerationId.load(std::memory_order_relaxed) == generationId) {
+                    logNativeMessage(GGML_LOG_LEVEL_WARN,
+                        "Generation " + std::to_string(static_cast<long long>(generationId)) +
+                        " interrupted during prompt decode; decode_result=" + std::to_string(decodeResult));
                     env->CallVoidMethod(
                         callback, onCompleted, kFinishStopped, 0, 0.0f, static_cast<jlong>(0)
                     );
@@ -695,6 +716,10 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
         const int64_t promptEvalMs = std::max<int64_t>(
             0, (llama_time_us() - promptEvalStartUs) / 1000
         );
+        logNativeMessage(GGML_LOG_LEVEL_INFO,
+            "Generation " + std::to_string(static_cast<long long>(generationId)) +
+            " prompt evaluation complete: " + std::to_string(promptTokenCount) +
+            " tokens in " + std::to_string(static_cast<long long>(promptEvalMs)) + " ms");
         env->CallVoidMethod(
             callback,
             onStarted,
@@ -755,7 +780,7 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
         const int64_t generationStartUs = llama_time_us();
 
         while (generatedTokens < safeMaxTokens) {
-            if (g_abortRequested.load()) {
+            if (g_stopGenerationId.load(std::memory_order_relaxed) == generationId) {
                 finishReason = kFinishStopped;
                 break;
             }
@@ -784,7 +809,7 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
                 tokensPerSecond
             );
             if (env->ExceptionCheck()) {
-                g_abortRequested.store(true);
+                g_stopGenerationId.store(generationId, std::memory_order_relaxed);
                 return;
             }
 
@@ -815,7 +840,7 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
                 inferenceContext.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()
             );
             if (decodeResult != 0) {
-                if (g_abortRequested.load()) {
+                if (g_stopGenerationId.load(std::memory_order_relaxed) == generationId) {
                     finishReason = kFinishStopped;
                     break;
                 }
@@ -843,6 +868,11 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
         const float finalTokensPerSecond = static_cast<float>(generatedTokens) * 1000.0f /
             static_cast<float>(durationMs);
 
+        logNativeMessage(GGML_LOG_LEVEL_INFO,
+            "Generation " + std::to_string(static_cast<long long>(generationId)) +
+            " completed: finish=" + std::to_string(finishReason) +
+            " tokens=" + std::to_string(generatedTokens) +
+            " duration=" + std::to_string(static_cast<long long>(durationMs)) + " ms");
         env->CallVoidMethod(
             callback,
             onCompleted,

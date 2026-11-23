@@ -20,6 +20,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ExampleUnitTest {
+    @Test
+    fun inferenceConfig_defaultsAreMobileFriendly() {
+        val config = InferenceConfig()
+        assertEquals(2048, config.contextLength)
+        assertEquals(128, config.batchSize)
+        assertTrue(config.useMmap)
+        assertFalse(config.useMlock)
+    }
+
 
     @Test
     fun promptFormatter_estimatesTokensForText() {

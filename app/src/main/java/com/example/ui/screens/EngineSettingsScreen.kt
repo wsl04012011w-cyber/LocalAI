@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -70,7 +71,7 @@ fun EngineSettingsScreen(
 
 
     Box(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize().navigationBarsPadding(),
         contentAlignment = Alignment.TopCenter
     ) {
         LazyColumn(
@@ -83,6 +84,12 @@ fun EngineSettingsScreen(
             // Selective Bounded Hardware & Context Controls
             item {
                 SectionCard(title = "Limites Seletivos de Hardware & Contexto") {
+                Text(
+                    text = "Preset móvel inicial: n_ctx=2048, n_batch=128 e n_ubatch=64. O microbatch menor reduz o pico temporário de memória durante o prefill. Aumente os valores aos poucos se o aparelho suportar.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(10.dp))
                     // 1. Context Window (n_ctx) bounded by model maxContextLength
                     ParameterHeader(
                         title = "Janela de Contexto (n_ctx)",

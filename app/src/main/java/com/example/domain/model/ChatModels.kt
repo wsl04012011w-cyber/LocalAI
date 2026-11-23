@@ -98,9 +98,10 @@ object EngineLimits {
 }
 
 data class InferenceConfig(
-    val contextLength: Int = 4096,
+    // Conservative smartphone defaults; the user can raise context and batch in Engine settings.
+    val contextLength: Int = 2048,
     val threads: Int = 4,
-    val batchSize: Int = 512,
+    val batchSize: Int = 128,
     val gpuLayers: Int = 0,
     val useMmap: Boolean = true,
     val useMlock: Boolean = false,

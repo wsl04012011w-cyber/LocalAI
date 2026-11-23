@@ -27,6 +27,8 @@ import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.withContext
 import java.io.Closeable
 import kotlin.coroutines.coroutineContext
@@ -46,6 +48,9 @@ class JniLlamaEngineAdapter(
 
     @Volatile
     private var nativeHandle: Long = 0L
+
+    @Volatile
+    private var activeGenerationId: Long = 0L
 
 
     private val _engineState = MutableStateFlow(EngineLifecycleState.UNLOADED)
@@ -71,7 +76,7 @@ class JniLlamaEngineAdapter(
         model: GgufModelSpec,
         config: InferenceConfig
     ): Result<Unit> = operationMutex.withLock {
-        nativeRequestStop()
+        requestActiveGenerationStop()
         withContext(nativeDispatcher) {
             _engineState.value = EngineLifecycleState.LOADING_MODEL
             releaseModelInternal()
@@ -147,7 +152,7 @@ class JniLlamaEngineAdapter(
     }
 
     override suspend fun unloadModel() {
-        nativeRequestStop()
+        requestActiveGenerationStop()
         operationMutex.withLock {
             withContext(nativeDispatcher) {
                 releaseModelInternal()
@@ -172,16 +177,28 @@ class JniLlamaEngineAdapter(
             return@channelFlow
         }
 
+        val generationId = NEXT_GENERATION_ID.getAndIncrement()
+        activeGenerationId = generationId
         val producer = this
+        val generationFinished = AtomicBoolean(false)
+        var promptTokenCount = 0
+
+        AppDiagnosticsLogger.info(
+            "INFERENCE",
+            "Iniciando geração id=${generationId}; handle=${handle}; mensagens=${messages.size}; n_ctx=${config.contextLength}; n_batch=${config.batchSize}; n_threads=${config.threads}"
+        )
+
         val generationJob = launch(nativeDispatcher) {
-            // Reset only after this generation reaches the serialized native queue.
-            nativeResetStop()
-            var promptTokenCount = 0
             _engineState.value = EngineLifecycleState.GENERATING
             try {
                 val prompt = formatPromptWithModelTemplate(handle, messages, config)
+                AppDiagnosticsLogger.info(
+                    "INFERENCE",
+                    "Prompt Jinja pronto para geração id=${generationId}; chars=${prompt.length}"
+                )
                 nativeGenerate(
                     handle = handle,
+                    generationId = generationId,
                     prompt = prompt,
                     contextLength = config.contextLength,
                     batchSize = config.batchSize,
@@ -201,6 +218,10 @@ class JniLlamaEngineAdapter(
                                 tokensPerSecond = 0f,
                                 promptEvalMs = promptEvalMs
                             )
+                            AppDiagnosticsLogger.info(
+                                "INFERENCE",
+                                "Prefill concluído id=${generationId}; prompt_tokens=${promptTokens}; tempo=${promptEvalMs}ms"
+                            )
                             producer.trySend(
                                 InferenceStreamEvent.Started(
                                     promptTokens = promptTokens,
@@ -214,6 +235,9 @@ class JniLlamaEngineAdapter(
                             totalTokens: Int,
                             tokensPerSecond: Float
                         ) {
+                            if (totalTokens == 1) {
+                                AppDiagnosticsLogger.info("INFERENCE", "Primeiro token recebido id=${generationId}")
+                            }
                             _telemetry.value = _telemetry.value.copy(
                                 promptTokensUsed = promptTokenCount + totalTokens,
                                 generatedTokens = totalTokens,
@@ -234,6 +258,10 @@ class JniLlamaEngineAdapter(
                             tokensPerSecond: Float,
                             durationMs: Long
                         ) {
+                            AppDiagnosticsLogger.info(
+                                "INFERENCE",
+                                "Geração concluída id=${generationId}; finish=${finishReason}; tokens=${totalTokens}; duração=${durationMs}ms"
+                            )
                             _engineState.value = EngineLifecycleState.READY
                             producer.trySend(
                                 InferenceStreamEvent.Completed(
@@ -246,7 +274,7 @@ class JniLlamaEngineAdapter(
                         }
 
                         override fun onError(message: String) {
-                            AppDiagnosticsLogger.error("INFERENCE", message)
+                            AppDiagnosticsLogger.error("INFERENCE", "Geração id=${generationId} falhou: ${message}")
                             _engineState.value = EngineLifecycleState.ERROR
                             producer.trySend(InferenceStreamEvent.Error(message))
                         }
@@ -254,13 +282,22 @@ class JniLlamaEngineAdapter(
                 )
 
                 if (_engineState.value == EngineLifecycleState.GENERATING) {
+                    AppDiagnosticsLogger.warn(
+                        "INFERENCE",
+                        "nativeGenerate retornou sem callback de conclusão id=${generationId}."
+                    )
                     _engineState.value = EngineLifecycleState.READY
                 }
             } catch (cancelled: CancellationException) {
+                AppDiagnosticsLogger.warn("INFERENCE", "Geração cancelada id=${generationId}.")
                 _engineState.value = EngineLifecycleState.READY
                 throw cancelled
             } catch (failure: Throwable) {
-                AppDiagnosticsLogger.error("INFERENCE", "Falha inesperada durante a geração nativa.", failure)
+                AppDiagnosticsLogger.error(
+                    "INFERENCE",
+                    "Falha inesperada durante a geração id=${generationId}.",
+                    failure
+                )
                 _engineState.value = EngineLifecycleState.ERROR
                 producer.trySend(
                     InferenceStreamEvent.Error(
@@ -268,13 +305,21 @@ class JniLlamaEngineAdapter(
                     )
                 )
             } finally {
+                generationFinished.set(true)
+                if (activeGenerationId == generationId) activeGenerationId = 0L
                 producer.close()
             }
         }
 
         awaitClose {
-            if (generationJob.isActive) {
-                nativeRequestStop()
+            // Closing the channel after onCompleted is normal. Only collector cancellation
+            // before native completion should stop this generation.
+            if (!generationFinished.get() && generationJob.isActive) {
+                AppDiagnosticsLogger.warn(
+                    "INFERENCE",
+                    "Coletor cancelado durante geração id=${generationId}; solicitando parada nativa."
+                )
+                nativeRequestStop(generationId)
                 generationJob.cancel()
             }
         }
@@ -288,11 +333,11 @@ class JniLlamaEngineAdapter(
     }
 
     override suspend fun stopGeneration() {
-        nativeRequestStop()
+        requestActiveGenerationStop()
     }
 
     override fun close() {
-        nativeRequestStop()
+        requestActiveGenerationStop()
         cleanupScope.launch {
             runCatching {
                 operationMutex.withLock {
@@ -303,6 +348,14 @@ class JniLlamaEngineAdapter(
                     }
                 }
             }
+        }
+    }
+
+    private fun requestActiveGenerationStop() {
+        val generationId = activeGenerationId
+        if (generationId > 0L) {
+            AppDiagnosticsLogger.warn("INFERENCE", "Solicitando interrupção da geração id=$generationId.")
+            nativeRequestStop(generationId)
         }
     }
 
@@ -505,12 +558,12 @@ class JniLlamaEngineAdapter(
     ): String
 
     private external fun nativeFreeModel(handle: Long)
-    private external fun nativeRequestStop()
-    private external fun nativeResetStop()
+    private external fun nativeRequestStop(generationId: Long)
     private external fun nativeSupportsGpuOffload(): Boolean
 
     private external fun nativeGenerate(
         handle: Long,
+        generationId: Long,
         prompt: String,
         contextLength: Int,
         batchSize: Int,
@@ -525,6 +578,8 @@ class JniLlamaEngineAdapter(
     )
 
     private companion object {
+        val NEXT_GENERATION_ID = AtomicLong(1L)
+
         const val FINISH_EOS = 0
         const val FINISH_MAX_TOKENS = 1
         const val FINISH_STOPPED = 2

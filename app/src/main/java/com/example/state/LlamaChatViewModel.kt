@@ -421,7 +421,14 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     private fun startStreamingResponse(sessionId: String) {
-        generationJob?.cancel()
+        if (generationJob?.isActive == true) {
+            AppDiagnosticsLogger.warn(
+                "INFERENCE",
+                "Nova solicitação ignorada porque a geração anterior ainda está encerrando."
+            )
+            statusBannerMessage.value = "A geração anterior ainda está encerrando. Tente novamente em instantes."
+            return
+        }
         val sessionSnapshot = repository.sessions.value.firstOrNull { it.id == sessionId } ?: return
         val historyForPrompt = sessionSnapshot.messages
         val assistantMsgId = UUID.randomUUID().toString()
@@ -437,9 +444,11 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
 
         repository.updateSessionMessages(sessionId) { it + placeholderAssistant }
 
+        AppDiagnosticsLogger.info("INFERENCE", "Criada resposta id=$assistantMsgId; histórico=${historyForPrompt.size} mensagens; modelo=${engine.loadedModel.value?.fileName}")
         generationJob = viewModelScope.launch {
             val streamBuffer = StringBuilder()
-            engine.streamCompletion(historyForPrompt, repository.config.value).collect { event ->
+            try {
+                engine.streamCompletion(historyForPrompt, repository.config.value).collect { event ->
                 when (event) {
                     is InferenceStreamEvent.Started -> {
                         repository.updateSessionMessages(sessionId) { messages ->
@@ -479,7 +488,13 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
                             messages.map { msg ->
                                 if (msg.id == assistantMsgId) {
                                     msg.copy(
-                                        content = streamBuffer.toString().ifBlank { "[Sem tokens emitidos]" },
+                                        content = streamBuffer.toString().ifBlank {
+                                            if (event.finishReason == FinishReason.STOPPED_BY_USER) {
+                                                "[Interrompido antes do primeiro token. Consulte Engine > Diagnóstico e logs.]"
+                                            } else {
+                                                "[A geração terminou sem emitir tokens. Consulte Engine > Diagnóstico e logs.]"
+                                            }
+                                        },
                                         status = finalStatus,
                                         tokenCount = event.totalTokens,
                                         tokensPerSecond = event.tokensPerSecond,
@@ -504,6 +519,23 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
                         statusBannerMessage.value = event.message
                     }
                 }
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                AppDiagnosticsLogger.warn("INFERENCE", "Coleta cancelada para resposta $assistantMsgId.")
+                throw cancelled
+            } catch (failure: Throwable) {
+                AppDiagnosticsLogger.error("INFERENCE", "Falha ao coletar eventos da engine.", failure)
+                repository.updateSessionMessages(sessionId) { messages ->
+                    messages.map { msg ->
+                        if (msg.id == assistantMsgId) {
+                            msg.copy(
+                                content = failure.message ?: "Falha ao receber a resposta da engine.",
+                                status = MessageStatus.ERROR
+                            )
+                        } else msg
+                    }
+                }
+                statusBannerMessage.value = failure.message ?: "Falha ao receber a resposta da engine."
             }
         }
     }
