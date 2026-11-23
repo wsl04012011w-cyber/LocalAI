@@ -26,7 +26,7 @@ class ExampleUnitTest {
         assertEquals(2048, config.contextLength)
         assertEquals(128, config.batchSize)
         assertTrue(config.useMmap)
-        assertFalse(config.useMlock)
+        assertEquals(false, config.useMlock)
     }
 
 
