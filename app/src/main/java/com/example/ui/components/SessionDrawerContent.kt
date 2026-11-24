@@ -51,12 +51,12 @@ fun SessionDrawerContent(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "LlamaLocal",
+                text = stringResource(R.string.app_name),
                 style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = "Inferência local GGUF • sem API",
+                text = "IA offline no dispositivo",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -85,7 +85,7 @@ fun SessionDrawerContent(
                 selected = currentDestination == AppDestination.MODELS,
                 onClick = { onNavigate(AppDestination.MODELS) },
                 icon = { Icon(Icons.Rounded.Memory, contentDescription = null) },
-                label = { Text("Modelos GGUF") },
+                label = { Text("Modelos") },
                 colors = NavigationDrawerItemDefaults.colors(
                     selectedContainerColor = MaterialTheme.colorScheme.primaryContainer
                 ),
@@ -95,7 +95,7 @@ fun SessionDrawerContent(
                 selected = currentDestination == AppDestination.ENGINE,
                 onClick = { onNavigate(AppDestination.ENGINE) },
                 icon = { Icon(Icons.Rounded.Tune, contentDescription = null) },
-                label = { Text("Parâmetros llama.cpp") },
+                label = { Text("Configurações") },
                 colors = NavigationDrawerItemDefaults.colors(
                     selectedContainerColor = MaterialTheme.colorScheme.primaryContainer
                 ),

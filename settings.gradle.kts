@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "LlamaLocal"
+rootProject.name = "Ayr off"
 
 include(":app")

@@ -26,16 +26,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.AppDiagnosticsLogger
 import com.example.state.AppDestination
 import com.example.state.LlamaChatAction
 import com.example.state.LlamaChatViewModel
+import com.example.ui.components.ConfigReloadBanner
+import com.example.ui.components.ContextSliderSheet
 import com.example.ui.components.MinimalTopBar
-import com.example.ui.components.PromptInspectorSheet
 import com.example.ui.components.SessionDrawerContent
 import com.example.ui.screens.ChatScreen
 import com.example.ui.screens.EngineSettingsScreen
@@ -52,21 +51,20 @@ class MainActivity : ComponentActivity() {
         AppDiagnosticsLogger.info("APP", "MainActivity criada; Android SDK=${android.os.Build.VERSION.SDK_INT}")
         setContent {
             LlamaLocalTheme(darkTheme = true) {
-                LlamaLocalApp()
+                AyrOffApp()
             }
         }
     }
 }
 
 @Composable
-fun LlamaLocalApp(
+fun AyrOffApp(
     viewModel: LlamaChatViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
-    val clipboard = LocalClipboardManager.current
 
     LaunchedEffect(uiState.statusBannerMessage) {
         val message = uiState.statusBannerMessage
@@ -78,12 +76,14 @@ fun LlamaLocalApp(
 
     BackHandler(
         enabled = drawerState.isOpen ||
-            uiState.isPromptInspectorOpen ||
+            uiState.isAttachmentSheetOpen ||
+            uiState.isContextSheetOpen ||
             uiState.currentDestination != AppDestination.CHAT
     ) {
         when {
             drawerState.isOpen -> scope.launch { drawerState.close() }
-            uiState.isPromptInspectorOpen -> viewModel.onAction(LlamaChatAction.SetPromptInspectorOpen(false))
+            uiState.isAttachmentSheetOpen -> viewModel.onAction(LlamaChatAction.SetAttachmentSheetOpen(false))
+            uiState.isContextSheetOpen -> viewModel.onAction(LlamaChatAction.SetContextSheetOpen(false))
             uiState.currentDestination != AppDestination.CHAT -> {
                 viewModel.onAction(LlamaChatAction.SelectDestination(AppDestination.CHAT))
             }
@@ -136,12 +136,15 @@ fun LlamaLocalApp(
                     onModelPillClick = {
                         viewModel.onAction(LlamaChatAction.SelectDestination(AppDestination.MODELS))
                     },
-                    onOpenPromptInspector = {
-                        viewModel.onAction(LlamaChatAction.SetPromptInspectorOpen(true))
-                    },
                     onNewChat = {
                         viewModel.onAction(LlamaChatAction.CreateNewSession)
                     }
+                )
+
+                ConfigReloadBanner(
+                    visible = uiState.hasPendingConfigChanges,
+                    isReloading = uiState.isLoadingModel,
+                    onReloadClick = { viewModel.onAction(LlamaChatAction.ReloadActiveModel) }
                 )
 
                 Box(modifier = Modifier.weight(1f)) {
@@ -164,12 +167,13 @@ fun LlamaLocalApp(
         }
     }
 
-    if (uiState.isPromptInspectorOpen) {
-        PromptInspectorSheet(
-            uiState = uiState,
-            formattedPrompt = viewModel.buildFormattedPromptPreview(),
-            onCopyPrompt = { text -> clipboard.setText(AnnotatedString(text)) },
-            onDismiss = { viewModel.onAction(LlamaChatAction.SetPromptInspectorOpen(false)) }
+    if (uiState.isContextSheetOpen) {
+        ContextSliderSheet(
+            currentContext = uiState.config.contextLength,
+            maxModelContext = uiState.maxModelContext,
+            modelName = uiState.loadedModel?.name,
+            onContextChange = { ctx -> viewModel.onAction(LlamaChatAction.UpdateContextLength(ctx)) },
+            onDismiss = { viewModel.onAction(LlamaChatAction.SetContextSheetOpen(false)) }
         )
     }
 }

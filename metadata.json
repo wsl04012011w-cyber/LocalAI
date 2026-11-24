@@ -1,6 +1,6 @@
 {
-  "name": "LlamaLocal",
-  "description": "Arquitetura front-end de chat com IA local em streaming e gerenciamento de estado para inferência GGUF com llama.cpp.",
+  "name": "Ayr off",
+  "description": "Assistente de IA offline no dispositivo com streaming e suporte a modelos de raciocínio e visão.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -17,7 +17,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.AddComment
-import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -43,7 +42,6 @@ fun MinimalTopBar(
     onOpenDrawer: () -> Unit,
     onNavigateBackToChat: () -> Unit,
     onModelPillClick: () -> Unit,
-    onOpenPromptInspector: () -> Unit,
     onNewChat: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -56,7 +54,6 @@ fun MinimalTopBar(
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         if (uiState.currentDestination == AppDestination.CHAT) {
-            // Minimalist 2-line menu icon matching the clean chat aesthetic
             IconButton(
                 onClick = onOpenDrawer,
                 modifier = Modifier
@@ -84,11 +81,11 @@ fun MinimalTopBar(
                 }
             }
 
-            // Quiet centered status pill only when a model is loaded or active messages exist
             val hasMessages = uiState.activeSession?.messages?.isNotEmpty() == true
             if (uiState.loadedModel != null || hasMessages) {
                 Row(
                     modifier = Modifier
+                        .weight(1f, fill = false)
                         .clip(RoundedCornerShape(50))
                         .clickable(onClick = onModelPillClick)
                         .padding(horizontal = 10.dp, vertical = 6.dp)
@@ -110,8 +107,7 @@ fun MinimalTopBar(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = uiState.loadedModel?.let { "${it.name} (${it.quantization.label})" }
-                            ?: "Sem modelo GGUF",
+                        text = uiState.loadedModel?.name ?: "Sem modelo",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -122,34 +118,19 @@ fun MinimalTopBar(
                 Spacer(modifier = Modifier.weight(1f))
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(
-                    onClick = onOpenPromptInspector,
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .testTag("inspect_prompt_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Code,
-                        contentDescription = stringResource(R.string.cd_inspect_prompt),
-                        tint = MaterialTheme.colorScheme.onBackground
-                    )
-                }
-                IconButton(
-                    onClick = onNewChat,
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .testTag("new_chat_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.AddComment,
-                        contentDescription = stringResource(R.string.cd_new_chat),
-                        tint = MaterialTheme.colorScheme.onBackground
-                    )
-                }
+            IconButton(
+                onClick = onNewChat,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("new_chat_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.AddComment,
+                    contentDescription = stringResource(R.string.cd_new_chat),
+                    tint = MaterialTheme.colorScheme.onBackground
+                )
             }
         } else {
-            // Secondary screen top bar (Models / Engine) with Back arrow
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(
                     onClick = onNavigateBackToChat,
@@ -166,8 +147,8 @@ fun MinimalTopBar(
                 Spacer(modifier = Modifier.width(4.dp))
                 Text(
                     text = when (uiState.currentDestination) {
-                        AppDestination.MODELS -> "Modelos GGUF"
-                        AppDestination.ENGINE -> "Parâmetros llama.cpp"
+                        AppDestination.MODELS -> "Modelos"
+                        AppDestination.ENGINE -> "Configurações"
                         AppDestination.CHAT -> ""
                     },
                     style = MaterialTheme.typography.titleLarge,
