@@ -69,6 +69,19 @@ jobs:
             fi
           done
 
+      - name: Print Kotlin compile target for diagnosis
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="$ANDROID_PROJECT_DIR/app/src/main/java/com/example/data/LocalModelStorageManager.kt"
+          if [[ -f "$TARGET" ]]; then
+            echo "----- $TARGET -----"
+            nl -ba "$TARGET" | sed -n '1,260p'
+          else
+            echo "::warning::Expected Kotlin source file not found; searching project."
+            find "$ANDROID_PROJECT_DIR" -name 'LocalModelStorageManager.kt' -print
+          fi
+
       - name: Configure Android SDK
         shell: bash
         run: |
