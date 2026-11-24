@@ -99,6 +99,7 @@ object EngineLimits {
     val REPEAT_PENALTY_OPTIONS = listOf(1.00f, 1.05f, 1.10f, 1.15f, 1.25f)
     val MICRO_BATCH_OPTIONS = listOf(0, 64, 128, 256, 512)
 
+    const val MIN_CONTEXT = 512
     const val MIN_THREADS = 1
     const val MAX_GPU_LAYERS = 99
     const val MIN_TEMP = 0.0f

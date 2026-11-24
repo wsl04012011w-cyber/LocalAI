@@ -23,6 +23,8 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
@@ -65,6 +67,8 @@ fun AyrOffApp(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    var isContextSheetOpen by remember { mutableStateOf(false) }
+    var hasPendingContextReload by remember { mutableStateOf(false) }
 
     LaunchedEffect(uiState.statusBannerMessage) {
         val message = uiState.statusBannerMessage
@@ -76,14 +80,12 @@ fun AyrOffApp(
 
     BackHandler(
         enabled = drawerState.isOpen ||
-            uiState.isAttachmentSheetOpen ||
-            uiState.isContextSheetOpen ||
+            isContextSheetOpen ||
             uiState.currentDestination != AppDestination.CHAT
     ) {
         when {
             drawerState.isOpen -> scope.launch { drawerState.close() }
-            uiState.isAttachmentSheetOpen -> viewModel.onAction(LlamaChatAction.SetAttachmentSheetOpen(false))
-            uiState.isContextSheetOpen -> viewModel.onAction(LlamaChatAction.SetContextSheetOpen(false))
+            isContextSheetOpen -> isContextSheetOpen = false
             uiState.currentDestination != AppDestination.CHAT -> {
                 viewModel.onAction(LlamaChatAction.SelectDestination(AppDestination.CHAT))
             }
@@ -136,15 +138,19 @@ fun AyrOffApp(
                     onModelPillClick = {
                         viewModel.onAction(LlamaChatAction.SelectDestination(AppDestination.MODELS))
                     },
+                    onOpenContextSheet = { isContextSheetOpen = true },
                     onNewChat = {
                         viewModel.onAction(LlamaChatAction.CreateNewSession)
                     }
                 )
 
                 ConfigReloadBanner(
-                    visible = uiState.hasPendingConfigChanges,
+                    visible = hasPendingContextReload && uiState.loadedModel != null,
                     isReloading = uiState.isLoadingModel,
-                    onReloadClick = { viewModel.onAction(LlamaChatAction.ReloadActiveModel) }
+                    onReloadClick = {
+                        viewModel.onAction(LlamaChatAction.ReloadActiveModel)
+                        hasPendingContextReload = false
+                    }
                 )
 
                 Box(modifier = Modifier.weight(1f)) {
@@ -167,13 +173,16 @@ fun AyrOffApp(
         }
     }
 
-    if (uiState.isContextSheetOpen) {
+    if (isContextSheetOpen) {
         ContextSliderSheet(
             currentContext = uiState.config.contextLength,
-            maxModelContext = uiState.maxModelContext,
+            maxModelContext = uiState.loadedModel?.maxContextLength ?: 8192,
             modelName = uiState.loadedModel?.name,
-            onContextChange = { ctx -> viewModel.onAction(LlamaChatAction.UpdateContextLength(ctx)) },
-            onDismiss = { viewModel.onAction(LlamaChatAction.SetContextSheetOpen(false)) }
+            onContextChange = { ctx ->
+                viewModel.onAction(LlamaChatAction.UpdateContextLength(ctx))
+                if (uiState.loadedModel != null) hasPendingContextReload = true
+            },
+            onDismiss = { isContextSheetOpen = false }
         )
     }
 }

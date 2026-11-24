@@ -15,6 +15,7 @@ sealed interface LlamaChatAction {
     data class LoadModel(val model: GgufModelSpec) : LlamaChatAction
     data object LoadRecommendedModel : LlamaChatAction
     data object UnloadModel : LlamaChatAction
+    data object ReloadActiveModel : LlamaChatAction
     data class DownloadModel(val model: GgufModelSpec) : LlamaChatAction
     data class OpenModelRepository(val url: String) : LlamaChatAction
     data class ImportGgufUri(val uri: Uri) : LlamaChatAction

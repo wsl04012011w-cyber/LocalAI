@@ -153,6 +153,7 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
                 if (recommended != null) handleLoadModel(recommended)
             }
             LlamaChatAction.UnloadModel -> handleUnloadModel()
+            LlamaChatAction.ReloadActiveModel -> handleReloadActiveModel()
             is LlamaChatAction.DownloadModel -> handleDownloadModel(action.model)
             is LlamaChatAction.OpenModelRepository -> handleOpenRepo(action.url)
             is LlamaChatAction.ImportGgufUri -> handleImportGgufUri(action.uri)
@@ -343,6 +344,51 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
             generationJob?.cancel()
             engine.unloadModel()
             statusBannerMessage.value = "Modelo descarregado da memória; cópia privada preservada."
+        }
+    }
+
+    private fun handleReloadActiveModel() {
+        val model = engine.loadedModel.value
+        if (model == null) {
+            statusBannerMessage.value = "Nenhum modelo está carregado para recarregar."
+            return
+        }
+        if (uiState.value.isGenerating) {
+            statusBannerMessage.value = "Interrompa a geração antes de recarregar o modelo."
+            return
+        }
+        if (modelLoadInProgress || uiState.value.isLoadingModel) {
+            statusBannerMessage.value = "Um carregamento já está em andamento."
+            return
+        }
+
+        modelLoadInProgress = true
+        viewModelScope.launch {
+            try {
+                AppDiagnosticsLogger.info(
+                    "MODEL",
+                    "Recarregando \${model.fileName} com a configuração de inferência atual."
+                )
+                engine.unloadModel()
+                val result = runCatching {
+                    engine.loadModel(model, repository.config.value).getOrThrow()
+                }
+                val isActuallyReady = result.isSuccess &&
+                    engine.loadedModel.value?.id == model.id &&
+                    engine.engineState.value == EngineLifecycleState.READY
+
+                if (isActuallyReady) {
+                    statusBannerMessage.value = "Modelo recarregado com a nova janela de contexto."
+                    AppDiagnosticsLogger.info("MODEL", "Recarga confirmada: \${model.fileName}.")
+                } else {
+                    val failure = result.exceptionOrNull()
+                    statusBannerMessage.value =
+                        "Falha ao recarregar \${model.name}: \${failure?.message ?: "a engine não confirmou o modelo ativo"}"
+                    AppDiagnosticsLogger.error("MODEL", "Falha ao confirmar recarga de \${model.fileName}.", failure)
+                }
+            } finally {
+                modelLoadInProgress = false
+            }
         }
     }
 

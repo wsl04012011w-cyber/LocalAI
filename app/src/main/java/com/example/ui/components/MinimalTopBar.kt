@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.AddComment
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -42,6 +43,7 @@ fun MinimalTopBar(
     onOpenDrawer: () -> Unit,
     onNavigateBackToChat: () -> Unit,
     onModelPillClick: () -> Unit,
+    onOpenContextSheet: () -> Unit,
     onNewChat: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -116,6 +118,19 @@ fun MinimalTopBar(
                 }
             } else {
                 Spacer(modifier = Modifier.weight(1f))
+            }
+
+            IconButton(
+                onClick = onOpenContextSheet,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("open_context_sheet_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Tune,
+                    contentDescription = "Ajustar contexto",
+                    tint = MaterialTheme.colorScheme.onBackground
+                )
             }
 
             IconButton(
