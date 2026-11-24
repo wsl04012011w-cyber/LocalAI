@@ -367,7 +367,7 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
             try {
                 AppDiagnosticsLogger.info(
                     "MODEL",
-                    "Recarregando \${model.fileName} com a configuração de inferência atual."
+                    "Recarregando ${model.fileName} com a configuração de inferência atual."
                 )
                 engine.unloadModel()
                 val result = runCatching {
@@ -379,12 +379,12 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
 
                 if (isActuallyReady) {
                     statusBannerMessage.value = "Modelo recarregado com a nova janela de contexto."
-                    AppDiagnosticsLogger.info("MODEL", "Recarga confirmada: \${model.fileName}.")
+                    AppDiagnosticsLogger.info("MODEL", "Recarga confirmada: ${model.fileName}.")
                 } else {
                     val failure = result.exceptionOrNull()
                     statusBannerMessage.value =
-                        "Falha ao recarregar \${model.name}: \${failure?.message ?: "a engine não confirmou o modelo ativo"}"
-                    AppDiagnosticsLogger.error("MODEL", "Falha ao confirmar recarga de \${model.fileName}.", failure)
+                        "Falha ao recarregar ${model.name}: ${failure?.message ?: "a engine não confirmou o modelo ativo"}"
+                    AppDiagnosticsLogger.error("MODEL", "Falha ao confirmar recarga de ${model.fileName}.", failure)
                 }
             } finally {
                 modelLoadInProgress = false
