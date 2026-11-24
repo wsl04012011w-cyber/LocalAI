@@ -22,7 +22,7 @@ import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Manages the app's private \`data\` storage directory (\`context.filesDir/models/\`)
+ * Manages the app's private `data` storage directory (`context.filesDir/models/`)
  * for downloaded and imported GGUF models, streaming downloads with real-time progress,
  * speed, remaining bytes, and ETA.
  */
@@ -74,7 +74,7 @@ class LocalModelStorageManager(
         if (activeJobs.containsKey(model.id)) return
 
         val job = scope.launch(Dispatchers.IO) {
-            val partFile = File(modelsDir, "\${model.fileName}.part")
+            val partFile = File(modelsDir, "${model.fileName}.part")
             val finalFile = File(modelsDir, model.fileName)
             var connection: HttpURLConnection? = null
             try {
@@ -170,7 +170,7 @@ class LocalModelStorageManager(
     }
 
     suspend fun importFromSafUri(uri: Uri): File? = withContext(Dispatchers.IO) {
-        var displayName = "modelo_importado_\${System.currentTimeMillis()}.gguf"
+        var displayName = "modelo_importado_${System.currentTimeMillis()}.gguf"
         context.contentResolver.query(
             uri,
             arrayOf(OpenableColumns.DISPLAY_NAME),
