@@ -88,6 +88,22 @@ data class GgufModelSpec(
     val description: String
 )
 
+
+data class ModelDownloadProgress(
+    val modelId: String,
+    val downloadedBytes: Long,
+    val totalBytes: Long,
+    val speedBytesPerSec: Long,
+    val etaSeconds: Long
+) {
+    val progressFraction: Float
+        get() = if (totalBytes > 0L) {
+            (downloadedBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
+        } else {
+            0f
+        }
+}
+
 object EngineLimits {
     val CONTEXT_OPTIONS = listOf(512, 1024, 2048, 4096, 8192)
     val BATCH_OPTIONS = listOf(64, 128, 256, 512, 1024)
