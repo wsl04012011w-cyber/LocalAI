@@ -1,0 +1,46 @@
+name: Source Snapshot
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout complete project
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Create clean source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p snapshot/LocalAI-main
+          rsync -a ./ snapshot/LocalAI-main/ \
+            --exclude='.git' \
+            --exclude='**/.git' \
+            --exclude='.gradle' \
+            --exclude='**/.gradle' \
+            --exclude='build' \
+            --exclude='**/build' \
+            --exclude='.cxx' \
+            --exclude='**/.cxx' \
+            --exclude='local.properties'
+          cd snapshot
+          zip -qr ../LocalAI-engine-baseline.zip LocalAI-main
+          cd ..
+          sha256sum LocalAI-engine-baseline.zip
+
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalAI-engine-baseline-source
+          path: LocalAI-engine-baseline.zip
+          if-no-files-found: error
+          retention-days: 90
