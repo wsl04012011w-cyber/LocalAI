@@ -89,6 +89,51 @@ fun ModelsScreen(
                 )
             }
 
+            uiState.loadedModel?.let { loaded ->
+                item(key = "active_loaded_model") {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(
+                                width = 1.dp,
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.42f),
+                                shape = RoundedCornerShape(16.dp)
+                            )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "Modelo carregado na memória",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = loaded.name,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                text = loaded.fileName,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            FilledTonalButton(
+                                onClick = { onAction(LlamaChatAction.UnloadModel) },
+                                enabled = !uiState.isGenerating && !uiState.isLoadingModel,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("unload_active_model_button")
+                            ) {
+                                Text("Descarregar da memória")
+                            }
+                        }
+                    }
+                }
+            }
+
             item {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainer,
