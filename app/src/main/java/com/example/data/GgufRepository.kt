@@ -16,10 +16,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.util.UUID
 
-class GgufRepository(context: Context, defaultThreads: Int) {
+class GgufRepository(context: Context?, defaultThreads: Int) {
 
-    private val modelPreferences = context.getSharedPreferences("localai_model_registry", Context.MODE_PRIVATE)
-    private val restoredImportedModels = restoreImportedModels()
+    constructor(defaultThreads: Int) : this(null, defaultThreads)
+
+    private val modelPreferences = context?.getSharedPreferences("localai_model_registry", Context.MODE_PRIVATE)
+    private val restoredImportedModels = if (modelPreferences != null) restoreImportedModels() else emptyList()
     private val _models = MutableStateFlow(defaultProfileSlots() + restoredImportedModels)
     val models: StateFlow<List<GgufModelSpec>> = _models.asStateFlow()
 
@@ -68,8 +70,10 @@ class GgufRepository(context: Context, defaultThreads: Int) {
         persistImportedModels(updated)
     }
 
-    private fun restoreImportedModels(): List<GgufModelSpec> = runCatching {
-        val array = JSONArray(modelPreferences.getString(KEY_IMPORTED_MODELS, "[]") ?: "[]")
+    private fun restoreImportedModels(): List<GgufModelSpec> {
+        val preferences = modelPreferences ?: return emptyList()
+        return runCatching {
+        val array = JSONArray(preferences.getString(KEY_IMPORTED_MODELS, "[]") ?: "[]")
         buildList {
             for (index in 0 until array.length()) {
                 val item = array.optJSONObject(index) ?: continue
@@ -97,11 +101,13 @@ class GgufRepository(context: Context, defaultThreads: Int) {
                 )
             }
         }
-    }.onFailure {
-        AppDiagnosticsLogger.error("MODEL", "Falha ao restaurar modelos importados", it)
-    }.getOrDefault(emptyList())
+        }.onFailure {
+            AppDiagnosticsLogger.error("MODEL", "Falha ao restaurar modelos importados", it)
+        }.getOrDefault(emptyList())
+    }
 
     private fun persistImportedModels(models: List<GgufModelSpec>) {
+        val preferences = modelPreferences ?: return
         val array = JSONArray()
         models.filter { it.origin == ModelOrigin.DEVICE_STORAGE }.forEach { model ->
             array.put(
@@ -121,7 +127,7 @@ class GgufRepository(context: Context, defaultThreads: Int) {
                     .put("description", model.description)
             )
         }
-        modelPreferences.edit().putString(KEY_IMPORTED_MODELS, array.toString()).apply()
+        preferences.edit().putString(KEY_IMPORTED_MODELS, array.toString()).apply()
     }
 
     private companion object {
