@@ -1,0 +1,80 @@
+name: Android APK Build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "llamalocal-integrado-llamacpp.zip"
+      - ".github/workflows/android-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Extract uploaded project ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p project
+          unzip -q "llamalocal-integrado-llamacpp.zip" -d project
+          echo "ZIP extracted."
+          find project -maxdepth 4 -type f \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) -print
+
+      - name: Locate Gradle project and wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          SETTINGS="$(find project -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)"
+          if [[ -z "$SETTINGS" ]]; then
+            echo "::error::The ZIP does not contain settings.gradle or settings.gradle.kts. Upload the full Android/Gradle project."
+            exit 1
+          fi
+          ROOT="$(dirname "$SETTINGS")"
+          if [[ ! -f "$ROOT/gradlew" ]]; then
+            echo "::error::Gradle project found at $ROOT but gradlew is missing from the ZIP."
+            exit 1
+          fi
+          chmod +x "$ROOT/gradlew"
+          echo "ANDROID_PROJECT_DIR=$ROOT" >> "$GITHUB_ENV"
+          echo "Found Android project: $ROOT"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$ANDROID_PROJECT_DIR"
+          ./gradlew --no-daemon assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalAI-debug-apk
+          path: |
+            ${{ env.ANDROID_PROJECT_DIR }}/**/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+          retention-days: 14
