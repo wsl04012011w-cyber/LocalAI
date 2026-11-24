@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">Ayr off</string>
+    <string name="cd_app_logo">Logotipo do Ayr off</string>
+    <string name="cd_open_sessions">Abrir histórico de conversas</string>
+    <string name="cd_new_chat">Nova conversa</string>
+    <string name="cd_attach_file">Anexar arquivo ou imagem</string>
+    <string name="cd_send_prompt">Enviar mensagem</string>
+    <string name="cd_stop_generation">Parar resposta</string>
+    <string name="cd_copy_message">Copiar mensagem</string>
+    <string name="cd_regenerate">Gerar novamente</string>
+    <string name="cd_delete_session">Excluir conversa</string>
+    <string name="cd_import_model">Importar modelo do aparelho</string>
+</resources>
