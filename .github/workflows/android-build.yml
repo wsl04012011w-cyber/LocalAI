@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: android-build-${{ github.ref }}
@@ -84,6 +84,44 @@ jobs:
             find "$ANDROID_PROJECT_DIR" -name 'LocalModelStorageManager.kt' -print
           fi
 
+      - name: Fix self-reference in model download coroutine
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path("$ANDROID_PROJECT_DIR/app/src/main/java/com/example/data/LocalModelStorageManager.kt")
+          text = source.read_text(encoding="utf-8")
+          old = "activeJobs.remove(model.id, job)"
+          new = """kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.let { currentJob ->
+                              activeJobs.remove(model.id, currentJob)
+                          }"""
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f"Expected exactly one faulty job reference; found {count}")
+          source.write_text(text.replace(old, new), encoding="utf-8")
+          print(f"Patched {source}: cleanup now uses the current coroutine Job.")
+          PY
+
+      - name: Save patched source back to repository ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd "$ANDROID_PROJECT_DIR" && zip -qr "$GITHUB_WORKSPACE/.patched-project.zip" .)
+          mv "$GITHUB_WORKSPACE/.patched-project.zip" "$GITHUB_WORKSPACE/llamalocal-integrado-llamacpp.zip"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add llamalocal-integrado-llamacpp.zip
+          if ! git diff --cached --quiet; then
+            git commit -m "fix: correct model download coroutine job cleanup [skip ci]"
+            if ! git push origin HEAD:main; then
+              echo "::warning::Could not persist the patched ZIP to main; this run will still compile the patched extracted project."
+            fi
+          else
+            echo "Patched project ZIP is already up to date."
+          fi
+
       - name: Configure Android SDK
         shell: bash
         run: |
@@ -126,6 +164,15 @@ jobs:
           else
             gradle --no-daemon assembleDebug
           fi
+
+      - name: Upload patched source ZIP
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LocalAI-patched-source
+          path: llamalocal-integrado-llamacpp.zip
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
