@@ -1,6 +1,7 @@
 package com.example.state
 
 import android.net.Uri
+import com.example.domain.model.FlashAttentionMode
 import com.example.domain.model.GgufModelSpec
 import com.example.domain.model.KvCacheQuant
 
@@ -32,6 +33,9 @@ sealed interface LlamaChatAction {
     data class UpdateContextLength(val nCtx: Int) : LlamaChatAction
     data class UpdateThreads(val threads: Int) : LlamaChatAction
     data class UpdateBatchSize(val nBatch: Int) : LlamaChatAction
+    data class UpdateMicroBatchSize(val nUBatch: Int) : LlamaChatAction
+    data class UpdateFlashAttentionMode(val mode: FlashAttentionMode) : LlamaChatAction
+    data class ToggleThinking(val enabled: Boolean) : LlamaChatAction
     data class UpdateGpuLayers(val layers: Int) : LlamaChatAction
     data class ToggleMmap(val enabled: Boolean) : LlamaChatAction
     data class ToggleMlock(val enabled: Boolean) : LlamaChatAction

@@ -22,6 +22,10 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -45,7 +49,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -62,6 +68,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.collect
 import com.example.R
 import com.example.domain.model.MessageRole
 import com.example.state.AppDestination
@@ -78,19 +85,38 @@ fun ChatScreen(
     val messages = uiState.activeSession?.messages.orEmpty()
     val listState = rememberLazyListState()
     val clipboard = LocalClipboardManager.current
+    val autoFollowState = remember { mutableStateOf(true) }
 
-    val isNearBottom by remember {
-        derivedStateOf {
-            val layoutInfo = listState.layoutInfo
-            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            layoutInfo.totalItemsCount == 0 || lastVisible >= layoutInfo.totalItemsCount - 2
+    val nestedScrollConnection = remember(listState) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && available.y > 0f) {
+                    autoFollowState.value = false
+                }
+                return Offset.Zero
+            }
         }
     }
 
-    val lastContentLength = messages.lastOrNull()?.content?.length ?: 0
-    LaunchedEffect(messages.size, lastContentLength) {
-        if (messages.isNotEmpty() && isNearBottom) {
-            listState.scrollToItem(messages.lastIndex)
+    val lastContentSize = messages.lastOrNull()?.let {
+        it.content.length + it.thinkingContent.length
+    } ?: 0
+    val latestContentSize = rememberUpdatedState(lastContentSize)
+    val latestBottomAnchorIndex = rememberUpdatedState(messages.size)
+
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.canScrollForward }.collect { canScrollForward ->
+            if (!canScrollForward) autoFollowState.value = true
+        }
+    }
+
+    LaunchedEffect(autoFollowState.value, uiState.isGenerating) {
+        if (autoFollowState.value && uiState.isGenerating) {
+            snapshotFlow { latestContentSize.value }.collect {
+                if (autoFollowState.value) {
+                    listState.scrollToItem(latestBottomAnchorIndex.value)
+                }
+            }
         }
     }
 
@@ -122,6 +148,7 @@ fun ChatScreen(
                     modifier = Modifier
                         .widthIn(max = 720.dp)
                         .fillMaxSize()
+                        .nestedScroll(nestedScrollConnection)
                 ) {
                     itemsIndexed(messages, key = { _, msg -> msg.id }) { _, message ->
                         MessageBubble(
@@ -132,6 +159,9 @@ fun ChatScreen(
                             onRegenerate = { onAction(LlamaChatAction.RegenerateLastResponse) }
                         )
                     }
+                    item(key = "bottom_anchor") {
+                        Spacer(modifier = Modifier.height(1.dp))
+                    }
                 }
             }
         }
@@ -140,7 +170,10 @@ fun ChatScreen(
         MinimalComposerCard(
             uiState = uiState,
             onDraftChange = { onAction(LlamaChatAction.UpdateDraft(it)) },
-            onSend = { onAction(LlamaChatAction.SendPrompt()) },
+            onSend = {
+                autoFollowState.value = true
+                onAction(LlamaChatAction.SendPrompt())
+            },
             onStop = { onAction(LlamaChatAction.StopGeneration) },
             onOpenModels = { onAction(LlamaChatAction.SelectDestination(AppDestination.MODELS)) },
             onOpenEngine = { onAction(LlamaChatAction.SelectDestination(AppDestination.ENGINE)) },

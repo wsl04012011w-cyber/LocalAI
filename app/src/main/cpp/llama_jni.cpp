@@ -3,6 +3,7 @@
 
 #include "llama.h"
 #include "chat.h"
+#include "ggml-backend.h"
 
 #include <algorithm>
 #include <atomic>
@@ -331,16 +332,27 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeLoadModel(
     jint gpuLayers,
     jboolean useMmap,
     jboolean useMlock,
-    jstring diagnosticsFilePath
+    jstring diagnosticsFilePath,
+    jstring nativeLibraryDirValue
 ) {
     try {
         {
             std::lock_guard<std::mutex> lock(g_logFileMutex);
             g_logFilePath = javaStringToUtf8(env, diagnosticsFilePath);
         }
-        std::call_once(g_backendInit, [] {
+        const std::string nativeLibraryDir = javaStringToUtf8(env, nativeLibraryDirValue);
+        if (nativeLibraryDir.empty()) {
+            throw std::runtime_error("Android nativeLibraryDir was empty; cannot load CPU backend variants.");
+        }
+        std::call_once(g_backendInit, [nativeLibraryDir] {
             llama_log_set(llamaAndroidLog, nullptr);
+            ggml_backend_load_all_from_path(nativeLibraryDir.c_str());
             llama_backend_init();
+            const char * systemInfo = llama_print_system_info();
+            logNativeMessage(
+                GGML_LOG_LEVEL_INFO,
+                std::string("llama.cpp system info: ") + (systemInfo != nullptr ? systemInfo : "unavailable")
+            );
         });
 
         if (gpuLayers > 0 && !llama_supports_gpu_offload()) {
@@ -405,7 +417,8 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeFormatPrompt(
     jobject /* thiz */,
     jlong handle,
     jobjectArray roles,
-    jobjectArray contents
+    jobjectArray contents,
+    jboolean enableThinking
 ) {
     auto * engine = reinterpret_cast<NativeEngine *>(handle);
     if (engine == nullptr || engine->model == nullptr) {
@@ -430,7 +443,7 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeFormatPrompt(
         common_chat_templates_inputs inputs;
         inputs.use_jinja = true;
         inputs.add_generation_prompt = true;
-        inputs.enable_thinking = true;
+        inputs.enable_thinking = enableThinking == JNI_TRUE;
         inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
         inputs.messages.reserve(static_cast<size_t>(messageCount));
 
@@ -523,6 +536,9 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
     jfloat topP,
     jint topK,
     jfloat repeatPenalty,
+    jint microBatchSize,
+    jint flashAttentionType,
+    jboolean enableThinking,
     jobject callback
 ) {
     auto * engine = reinterpret_cast<NativeEngine *>(handle);
@@ -597,12 +613,19 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
         );
         const int32_t safeThreads = std::max(1, static_cast<int32_t>(threads));
         const int32_t safeMaxTokens = std::max(1, static_cast<int32_t>(maxTokens));
-        const uint32_t safeMicroBatch = std::min<uint32_t>(64, safeBatch);
+        const uint32_t requestedMicroBatch = microBatchSize > 0
+            ? static_cast<uint32_t>(microBatchSize)
+            : (safeBatch >= 512 ? 512U : std::min<uint32_t>(64, safeBatch));
+        const uint32_t safeMicroBatch = std::clamp<uint32_t>(
+            requestedMicroBatch, 1U, safeBatch
+        );
         logNativeMessage(GGML_LOG_LEVEL_INFO,
             "Generation " + std::to_string(static_cast<long long>(generationId)) +
             " params: n_ctx=" + std::to_string(safeContext) +
             " n_batch=" + std::to_string(safeBatch) +
             " n_ubatch=" + std::to_string(safeMicroBatch) +
+            " flash_attn=" + std::to_string(flashAttentionType) +
+            " thinking=" + (enableThinking == JNI_TRUE ? "on" : "off") +
             " threads=" + std::to_string(safeThreads) +
             " max_tokens=" + std::to_string(safeMaxTokens));
 
@@ -612,6 +635,7 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
         contextParams.n_ubatch = safeMicroBatch;
         contextParams.n_threads = safeThreads;
         contextParams.n_threads_batch = safeThreads;
+        contextParams.flash_attn_type = static_cast<llama_flash_attn_type>(flashAttentionType);
         contextParams.type_k = static_cast<ggml_type>(kvCacheType);
         contextParams.type_v = static_cast<ggml_type>(kvCacheType);
         NativeAbortContext abortContext{generationId};
@@ -640,7 +664,7 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
         common_chat_templates_inputs generationInputs;
         generationInputs.messages = std::move(chatMessages);
         generationInputs.add_generation_prompt = true;
-        generationInputs.enable_thinking = true;
+        generationInputs.enable_thinking = enableThinking == JNI_TRUE;
         generationInputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
         common_chat_session chatSession(generationTemplates.get(), vocab, generationInputs);
         const std::string prompt = chatSession.prompt().str();
@@ -800,16 +824,18 @@ Java_com_example_engine_JniLlamaEngineAdapter_nativeGenerate(
 
         // Apply penalties to logits first, then truncate candidates. Applying penalties
         // after top-k can leave a tiny, distorted candidate set (notably Qwen2.5).
-        llama_sampler_chain_add(
-            sampler.get(),
-            llama_sampler_init_penalties(
-                llama_vocab_n_tokens(vocab),
-                std::min(static_cast<int32_t>(safeContext), 128),
-                std::max(1.0f, repeatPenalty),
-                0.0f,
-                0.0f
-            )
-        );
+        if (repeatPenalty > 1.0f) {
+            llama_sampler_chain_add(
+                sampler.get(),
+                llama_sampler_init_penalties(
+                    llama_vocab_n_tokens(vocab),
+                    std::min(static_cast<int32_t>(safeContext), 128),
+                    repeatPenalty,
+                    0.0f,
+                    0.0f
+                )
+            );
+        }
         llama_sampler_chain_add(
             sampler.get(), llama_sampler_init_top_k(std::max(1, static_cast<int>(topK)))
         );

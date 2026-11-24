@@ -45,6 +45,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.domain.model.EngineLimits
+import com.example.domain.model.FlashAttentionMode
 import com.example.domain.model.KvCacheQuant
 import com.example.state.LlamaChatAction
 import com.example.state.LlamaChatUiState
@@ -68,7 +69,7 @@ fun EngineSettingsScreen(
     val maxCores = uiState.deviceMemory.cpuCores.coerceAtLeast(EngineLimits.MIN_THREADS)
     val recommendedThreads = (maxCores / 2).coerceIn(2, maxCores)
     val maxModelCtx = uiState.loadedModel?.maxContextLength ?: 8192
-
+    val automaticMicroBatch = if (config.batchSize >= 512) 512 else minOf(64, config.batchSize)
 
     Box(
         modifier = modifier.fillMaxSize().navigationBarsPadding(),
@@ -132,6 +133,24 @@ fun EngineSettingsScreen(
                                 enabled = allowed,
                                 onClick = { onAction(LlamaChatAction.UpdateBatchSize(batch)) },
                                 label = { Text("$batch") }
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    ParameterHeader(
+                        title = "Micro-batch (n_ubatch)",
+                        limitLabel = "Auto = $automaticMicroBatch; nunca acima de n_batch",
+                        valueLabel = if (config.microBatchSize == 0) "Auto ($automaticMicroBatch)" else "${config.microBatchSize}"
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        EngineLimits.MICRO_BATCH_OPTIONS.forEach { microBatch ->
+                            FilterChip(
+                                selected = config.microBatchSize == microBatch,
+                                enabled = microBatch == 0 || microBatch <= config.batchSize,
+                                onClick = { onAction(LlamaChatAction.UpdateMicroBatchSize(microBatch)) },
+                                label = { Text(if (microBatch == 0) "Auto ($automaticMicroBatch)" else "$microBatch") }
                             )
                         }
                     }
@@ -240,6 +259,22 @@ fun EngineSettingsScreen(
                         }
                     }
 
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Flash Attention (flash_attn_type)",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FlashAttentionMode.entries.forEach { mode ->
+                            FilterChip(
+                                selected = config.flashAttentionMode == mode,
+                                onClick = { onAction(LlamaChatAction.UpdateFlashAttentionMode(mode)) },
+                                label = { Text(mode.label) }
+                            )
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(10.dp))
                     ToggleRow(
                         title = "Memory-Mapped I/O (use_mmap)",
@@ -332,6 +367,13 @@ fun EngineSettingsScreen(
             // Embedded GGUF Jinja template & System Prompt
             item {
                 SectionCard(title = "Jinja do Modelo & System Prompt") {
+                    ToggleRow(
+                        title = "Thinking",
+                        subtitle = "Permite ao template do GGUF gerar conteúdo de raciocínio separado da resposta.",
+                        checked = config.enableThinking,
+                        onCheckedChange = { onAction(LlamaChatAction.ToggleThinking(it)) }
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
                     Text(
                         text = "O formato das mensagens vem de tokenizer.chat_template dentro do GGUF. O app usa esse template automaticamente e não aplica templates fixos.",
                         style = MaterialTheme.typography.bodySmall,
@@ -388,7 +430,7 @@ fun EngineSettingsScreen(
                             .padding(12.dp)
                     ) {
                         Text(
-                            text = "n_ctx=${config.contextLength} | n_batch=${config.batchSize} | n_threads=${config.threads} | max_tokens=${config.maxTokens} | n_gpu=${config.gpuLayers}",
+                            text = "n_ctx=${config.contextLength} | n_batch=${config.batchSize} | n_ubatch=${if (config.microBatchSize == 0) automaticMicroBatch else config.microBatchSize} | n_threads=${config.threads} | flash_attn=${config.flashAttentionMode.label} | thinking=${config.enableThinking} | max_tokens=${config.maxTokens} | n_gpu=${config.gpuLayers}",
                             style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMonoFontFamily),
                             color = MaterialTheme.colorScheme.primary
                         )

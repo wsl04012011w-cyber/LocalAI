@@ -124,7 +124,8 @@ class JniLlamaEngineAdapter(
                     config.gpuLayers,
                     config.useMmap,
                     config.useMlock,
-                    AppDiagnosticsLogger.logFilePath(context)
+                    AppDiagnosticsLogger.logFilePath(context),
+                    context.applicationInfo.nativeLibraryDir
                 )
                 check(handle != 0L) { "llama.cpp não retornou um handle de modelo válido." }
 
@@ -194,11 +195,11 @@ class JniLlamaEngineAdapter(
             _engineState.value = EngineLifecycleState.GENERATING
             try {
                 val (roles, contents) = prepareChatMessages(messages, config)
-                val prompt = nativeFormatPrompt(handle, roles, contents)
+                val promptContentChars = contents.sumOf { it.length }
                 val qwen25Defaults = isQwen25DefaultSampling(config)
                 AppDiagnosticsLogger.info(
                     "INFERENCE",
-                    "Prompt Jinja pronto para geração id=${generationId}; chars=${prompt.length}; parser common_chat_session ativo"
+                    "Prompt Jinja será renderizado uma vez na geração id=${generationId}; chars_de_conteúdo=${promptContentChars}; parser common_chat_session ativo"
                 )
                 if (qwen25Defaults) {
                     AppDiagnosticsLogger.info(
@@ -220,6 +221,9 @@ class JniLlamaEngineAdapter(
                     topP = if (qwen25Defaults) 0.8f else config.topP,
                     topK = if (qwen25Defaults) 20 else config.topK,
                     repeatPenalty = if (qwen25Defaults) 1.05f else config.repeatPenalty,
+                    microBatchSize = config.microBatchSize,
+                    flashAttentionType = config.flashAttentionMode.nativeValue,
+                    enableThinking = config.enableThinking,
                     callbacks = object : NativeCallbacks {
                         override fun onStarted(promptTokens: Int, promptEvalMs: Long) {
                             promptTokenCount = promptTokens
@@ -349,7 +353,7 @@ class JniLlamaEngineAdapter(
             config.temperature == 0.7f &&
             config.topP == 0.9f &&
             config.topK == 40 &&
-            config.repeatPenalty == 1.1f
+            config.repeatPenalty == 1.0f
     }
 
     override fun formatPromptPreview(messages: List<ChatMessage>, config: InferenceConfig): String {
@@ -357,7 +361,7 @@ class JniLlamaEngineAdapter(
         if (handle == 0L) return "Selecione e carregue um GGUF para renderizar o template Jinja do modelo."
         return runCatching {
             val (roles, contents) = prepareChatMessages(messages, config)
-            nativeFormatPrompt(handle, roles, contents)
+            nativeFormatPrompt(handle, roles, contents, config.enableThinking)
         }.getOrElse { failure -> "Falha ao renderizar tokenizer.chat_template: ${failure.message ?: "template inválido"}" }
     }
 
@@ -577,13 +581,15 @@ class JniLlamaEngineAdapter(
         gpuLayers: Int,
         useMmap: Boolean,
         useMlock: Boolean,
-        diagnosticsFilePath: String
+        diagnosticsFilePath: String,
+        nativeLibraryDir: String
     ): Long
 
     private external fun nativeFormatPrompt(
         handle: Long,
         roles: Array<String>,
-        contents: Array<String>
+        contents: Array<String>,
+        enableThinking: Boolean
     ): String
 
     private external fun nativeFreeModel(handle: Long)
@@ -604,6 +610,9 @@ class JniLlamaEngineAdapter(
         topP: Float,
         topK: Int,
         repeatPenalty: Float,
+        microBatchSize: Int,
+        flashAttentionType: Int,
+        enableThinking: Boolean,
         callbacks: NativeCallbacks
     )
 

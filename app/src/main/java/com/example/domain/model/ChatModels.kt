@@ -60,6 +60,12 @@ enum class KvCacheQuant(
     Q4_0("Q4_0 (-75% KV)", 0.5f)
 }
 
+enum class FlashAttentionMode(val nativeValue: Int, val label: String) {
+    AUTO(-1, "Auto"),
+    DISABLED(0, "Desativado"),
+    ENABLED(1, "Ativado")
+}
+
 enum class ModelOrigin {
     PROFILE_SLOT,
     DEVICE_STORAGE
@@ -91,6 +97,7 @@ object EngineLimits {
     val TOP_P_OPTIONS = listOf(0.50f, 0.80f, 0.90f, 0.95f, 1.00f)
     val TOP_K_OPTIONS = listOf(1, 20, 40, 60, 80, 100)
     val REPEAT_PENALTY_OPTIONS = listOf(1.00f, 1.05f, 1.10f, 1.15f, 1.25f)
+    val MICRO_BATCH_OPTIONS = listOf(0, 64, 128, 256, 512)
 
     const val MIN_THREADS = 1
     const val MAX_GPU_LAYERS = 99
@@ -103,6 +110,10 @@ data class InferenceConfig(
     val contextLength: Int = 2048,
     val threads: Int = 4,
     val batchSize: Int = 128,
+    // 0 selects the automatic n_ubatch: 64 below n_batch=512, otherwise 512.
+    val microBatchSize: Int = 0,
+    val flashAttentionMode: FlashAttentionMode = FlashAttentionMode.AUTO,
+    val enableThinking: Boolean = true,
     val gpuLayers: Int = 0,
     val useMmap: Boolean = true,
     val useMlock: Boolean = false,
@@ -110,7 +121,7 @@ data class InferenceConfig(
     val temperature: Float = 0.7f,
     val topP: Float = 0.9f,
     val topK: Int = 40,
-    val repeatPenalty: Float = 1.1f,
+    val repeatPenalty: Float = 1.0f,
     val maxTokens: Int = 512,
     val systemPrompt: String = "Você é um assistente de IA local executado diretamente no dispositivo via llama.cpp. Responda de forma clara, objetiva e técnica."
 ) {

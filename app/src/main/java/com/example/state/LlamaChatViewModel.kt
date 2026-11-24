@@ -3,6 +3,7 @@ package com.example.state
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDiagnosticsLogger
@@ -25,13 +26,14 @@ import com.example.engine.LocalInferenceEngine
 import com.example.engine.PromptFormatter
 import com.example.engine.ThinkingTagParser
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.io.Closeable
 import java.util.UUID
 
@@ -187,6 +189,9 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
                 current.copy(
                     contextLength = boundedCtx,
                     batchSize = current.batchSize.coerceAtMost(boundedCtx),
+                    microBatchSize = if (current.microBatchSize > 0) {
+                        current.microBatchSize.coerceAtMost(current.batchSize.coerceAtMost(boundedCtx))
+                    } else 0,
                     maxTokens = current.maxTokens.coerceAtMost(boundedCtx)
                 )
             }
@@ -195,7 +200,22 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
                 current.copy(threads = action.threads.coerceIn(EngineLimits.MIN_THREADS, maxCores))
             }
             is LlamaChatAction.UpdateBatchSize -> repository.updateConfig { current ->
-                current.copy(batchSize = action.nBatch.coerceIn(64, current.contextLength))
+                val boundedBatch = action.nBatch.coerceIn(64, current.contextLength)
+                current.copy(
+                    batchSize = boundedBatch,
+                    microBatchSize = if (current.microBatchSize > 0) current.microBatchSize.coerceAtMost(boundedBatch) else 0
+                )
+            }
+            is LlamaChatAction.UpdateMicroBatchSize -> repository.updateConfig { current ->
+                current.copy(
+                    microBatchSize = if (action.nUBatch <= 0) 0 else action.nUBatch.coerceIn(1, current.batchSize)
+                )
+            }
+            is LlamaChatAction.UpdateFlashAttentionMode -> repository.updateConfig {
+                it.copy(flashAttentionMode = action.mode)
+            }
+            is LlamaChatAction.ToggleThinking -> repository.updateConfig {
+                it.copy(enableThinking = action.enabled)
             }
             is LlamaChatAction.UpdateGpuLayers -> {
                 if (action.layers > 0 && !engine.supportsGpuOffload) {
@@ -287,6 +307,9 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
                     current.copy(
                         contextLength = boundedCtx,
                         batchSize = current.batchSize.coerceAtMost(boundedCtx),
+                        microBatchSize = if (current.microBatchSize > 0) {
+                            current.microBatchSize.coerceAtMost(current.batchSize.coerceAtMost(boundedCtx))
+                        } else 0,
                         maxTokens = current.maxTokens.coerceAtMost(boundedCtx)
                     )
                 }
@@ -451,109 +474,128 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
             val responseBuffer = StringBuilder()
             val thinkingBuffer = StringBuilder()
             val thinkingParser = ThinkingTagParser()
+            var lastPublishMs = 0L
+            var latestTokenCount = 0
+            var latestTokensPerSecond = 0f
 
-            suspend fun appendSmoothly(text: String, isThinking: Boolean, totalTokens: Int, tokensPerSecond: Float) {
-                var index = 0
-                val target = if (isThinking) thinkingBuffer else responseBuffer
-                while (index < text.length) {
-                    val codePoint = text.codePointAt(index)
-                    val count = Character.charCount(codePoint)
-                    target.append(text.substring(index, index + count))
-                    index += count
-                    repository.updateSessionMessages(sessionId) { messages ->
-                        messages.map { msg ->
-                            if (msg.id == assistantMsgId) {
-                                msg.copy(
-                                    content = responseBuffer.toString(),
-                                    thinkingContent = thinkingBuffer.toString(),
-                                    status = MessageStatus.STREAMING,
-                                    tokenCount = if (totalTokens >= 0) totalTokens else msg.tokenCount,
-                                    tokensPerSecond = if (tokensPerSecond >= 0f) tokensPerSecond else msg.tokensPerSecond
-                                )
-                            } else msg
-                        }
-                    }
-                    delay(STREAM_CHARACTER_DELAY_MS)
+            fun appendSegments(segments: List<com.example.engine.ParsedOutputSegment>) {
+                segments.forEach { segment ->
+                    val target = if (segment.isThinking) thinkingBuffer else responseBuffer
+                    target.append(segment.text)
                 }
             }
 
-            suspend fun appendParsed(text: String, totalTokens: Int, tokensPerSecond: Float) {
-                thinkingParser.push(text).forEach { segment ->
-                    appendSmoothly(segment.text, segment.isThinking, totalTokens, tokensPerSecond)
+            suspend fun publishMessage(
+                status: MessageStatus = MessageStatus.STREAMING,
+                force: Boolean = false,
+                contentOverride: String? = null,
+                durationMs: Long = 0L
+            ) {
+                val now = SystemClock.elapsedRealtime()
+                if (!force && now - lastPublishMs < STREAM_PUBLISH_INTERVAL_MS) return
+                lastPublishMs = now
+
+                val visibleContent = contentOverride ?: responseBuffer.toString()
+                val visibleThinking = thinkingBuffer.toString()
+                repository.updateSessionMessages(sessionId) { messages ->
+                    messages.map { msg ->
+                        if (msg.id == assistantMsgId) {
+                            msg.copy(
+                                content = visibleContent,
+                                thinkingContent = visibleThinking,
+                                status = status,
+                                tokenCount = latestTokenCount,
+                                tokensPerSecond = latestTokensPerSecond,
+                                generationDurationMs = if (durationMs > 0L) durationMs else msg.generationDurationMs
+                            )
+                        } else msg
+                    }
                 }
             }
 
             try {
                 engine.streamCompletion(historyForPrompt, repository.config.value).collect { event ->
                     when (event) {
-                        is InferenceStreamEvent.Started -> {
-                            repository.updateSessionMessages(sessionId) { messages ->
-                                messages.map { msg ->
-                                    if (msg.id == assistantMsgId) msg.copy(status = MessageStatus.STREAMING) else msg
-                                }
-                            }
+                        is InferenceStreamEvent.Started -> publishMessage(force = true)
+
+                        is InferenceStreamEvent.Token -> {
+                            latestTokenCount = event.totalTokens
+                            latestTokensPerSecond = event.tokensPerSecond
+                            appendSegments(thinkingParser.push(event.text))
+                            publishMessage()
                         }
 
-                        is InferenceStreamEvent.Token -> appendParsed(event.text, event.totalTokens, event.tokensPerSecond)
-
-                        is InferenceStreamEvent.Thinking -> appendSmoothly(event.text, true, -1, -1f)
+                        is InferenceStreamEvent.Thinking -> {
+                            appendSegments(listOf(com.example.engine.ParsedOutputSegment(true, event.text)))
+                            publishMessage()
+                        }
 
                         is InferenceStreamEvent.Completed -> {
-                            thinkingParser.finish().forEach { segment ->
-                                appendSmoothly(segment.text, segment.isThinking, event.totalTokens, event.tokensPerSecond)
-                            }
+                            appendSegments(thinkingParser.finish())
+                            latestTokenCount = event.totalTokens
+                            latestTokensPerSecond = event.tokensPerSecond
                             val finalStatus = when (event.finishReason) {
                                 FinishReason.STOPPED_BY_USER -> MessageStatus.STOPPED
                                 FinishReason.EOS_TOKEN,
                                 FinishReason.MAX_TOKENS,
                                 FinishReason.CONTEXT_FULL -> MessageStatus.COMPLETED
                             }
-                            repository.updateSessionMessages(sessionId) { messages ->
-                                messages.map { msg ->
-                                    if (msg.id == assistantMsgId) {
-                                        msg.copy(
-                                            content = responseBuffer.toString().ifBlank {
-                                                if (thinkingBuffer.isNotBlank()) "[O modelo terminou o raciocínio sem uma resposta final.]"
-                                                else if (event.finishReason == FinishReason.STOPPED_BY_USER) "[Interrompido antes do primeiro token. Consulte Engine > Diagnóstico e logs.]"
-                                                else "[A geração terminou sem emitir tokens. Consulte Engine > Diagnóstico e logs.]"
-                                            },
-                                            thinkingContent = thinkingBuffer.toString(),
-                                            status = finalStatus,
-                                            tokenCount = event.totalTokens,
-                                            tokensPerSecond = event.tokensPerSecond,
-                                            generationDurationMs = event.durationMs
-                                        )
-                                    } else msg
+                            val finalContent = responseBuffer.toString().ifBlank {
+                                if (thinkingBuffer.isNotBlank()) {
+                                    "[O modelo terminou o raciocínio sem uma resposta final.]"
+                                } else if (event.finishReason == FinishReason.STOPPED_BY_USER) {
+                                    "[Interrompido antes do primeiro token. Consulte Engine > Diagnóstico e logs.]"
+                                } else {
+                                    "[A geração terminou sem emitir tokens. Consulte Engine > Diagnóstico e logs.]"
                                 }
                             }
+                            publishMessage(
+                                status = finalStatus,
+                                force = true,
+                                contentOverride = finalContent,
+                                durationMs = event.durationMs
+                            )
                         }
 
                         is InferenceStreamEvent.Error -> {
-                            repository.updateSessionMessages(sessionId) { messages ->
-                                messages.map { msg ->
-                                    if (msg.id == assistantMsgId) msg.copy(content = event.message, status = MessageStatus.ERROR) else msg
-                                }
-                            }
+                            appendSegments(thinkingParser.finish())
+                            val errorContent = responseBuffer.toString().ifBlank { event.message }
+                            publishMessage(
+                                status = MessageStatus.ERROR,
+                                force = true,
+                                contentOverride = errorContent
+                            )
                             statusBannerMessage.value = event.message
                         }
                     }
                 }
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 AppDiagnosticsLogger.warn("INFERENCE", "Coleta cancelada para resposta $assistantMsgId.")
+                withContext(NonCancellable) {
+                    appendSegments(thinkingParser.finish())
+                    publishMessage(
+                        status = MessageStatus.STOPPED,
+                        force = true,
+                        contentOverride = responseBuffer.toString().ifBlank {
+                            "[Interrompido antes do primeiro token. Consulte Engine > Diagnóstico e logs.]"
+                        }
+                    )
+                }
                 throw cancelled
             } catch (failure: Throwable) {
                 AppDiagnosticsLogger.error("INFERENCE", "Falha ao coletar eventos da engine.", failure)
-                repository.updateSessionMessages(sessionId) { messages ->
-                    messages.map { msg ->
-                        if (msg.id == assistantMsgId) {
-                            msg.copy(content = failure.message ?: "Falha ao receber a resposta da engine.", thinkingContent = thinkingBuffer.toString(), status = MessageStatus.ERROR)
-                        } else msg
-                    }
+                appendSegments(thinkingParser.finish())
+                val errorContent = responseBuffer.toString().ifBlank {
+                    failure.message ?: "Falha ao receber a resposta da engine."
                 }
+                publishMessage(
+                    status = MessageStatus.ERROR,
+                    force = true,
+                    contentOverride = errorContent
+                )
                 statusBannerMessage.value = failure.message ?: "Falha ao receber a resposta da engine."
             }
-        }
-    }
+        }    }
 
     private fun handleExportDiagnostics() {
         viewModelScope.launch {
@@ -578,7 +620,7 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    private companion object { const val STREAM_CHARACTER_DELAY_MS = 9L }
+    private companion object { const val STREAM_PUBLISH_INTERVAL_MS = 50L }
 
     override fun onCleared() {
         AppDiagnosticsLogger.info(

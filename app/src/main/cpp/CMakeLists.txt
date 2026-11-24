@@ -48,6 +48,7 @@ target_link_libraries(
     llama_jni
     PRIVATE
     llama
+    ggml
     llama-common
     android
     log

@@ -30,6 +30,10 @@ android {
       cmake {
         arguments += listOf(
           "-DANDROID_STL=c++_shared",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DBUILD_SHARED_LIBS=ON",
+          "-DGGML_BACKEND_DL=ON",
+          "-DGGML_CPU_ALL_VARIANTS=ON",
           "-DGGML_NATIVE=OFF",
           "-DGGML_OPENMP=OFF",
           "-DGGML_LLAMAFILE=OFF",
@@ -54,6 +58,12 @@ android {
     }
   }
 
+  packaging {
+    jniLibs {
+      useLegacyPackaging = true
+    }
+  }
+
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
   // and updating Android apps in AI Studio.
   signingConfigs {
@@ -73,6 +83,15 @@ android {
   }
 
   buildTypes {
+    // Force the native C/C++ toolchain to use Release for every Android variant.
+    configureEach {
+      externalNativeBuild {
+        cmake {
+          arguments += listOf("-DCMAKE_BUILD_TYPE=Release")
+        }
+      }
+    }
+
     release {
       isCrunchPngs = false
       isMinifyEnabled = false
@@ -85,6 +104,12 @@ android {
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
       signingConfig = signingConfigs.getByName("debugConfig")
+    }
+    create("releaseLocal") {
+      initWith(getByName("release"))
+      signingConfig = signingConfigs.getByName("debugConfig")
+      isDebuggable = false
+      isMinifyEnabled = false
     }
   }
   compileOptions {

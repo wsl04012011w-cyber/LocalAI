@@ -1,10 +1,5 @@
 package com.example.ui.components
 
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -39,9 +34,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -59,6 +54,8 @@ private sealed interface ContentSegment {
     data class CodeBlock(val language: String, val code: String) : ContentSegment
 }
 
+private val CODE_FENCE_REGEX = Regex("""\x60\x60\x60([a-zA-Z0-9_+-]*)\n?([\s\S]*?)(\x60\x60\x60|$)""")
+
 @Composable
 fun MessageBubble(
     message: ChatMessage,
@@ -70,14 +67,6 @@ fun MessageBubble(
 ) {
     val isUser = message.role == MessageRole.USER
     val segments = remember(message.content) { parseMarkdownSegments(message.content) }
-
-    val cursorTransition = rememberInfiniteTransition(label = "streamCursor")
-    val cursorAlpha by cursorTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = 0.15f,
-        animationSpec = infiniteRepeatable(tween(450), RepeatMode.Reverse),
-        label = "cursorAlpha"
-    )
 
     if (isUser) {
         Row(
@@ -191,6 +180,7 @@ fun MessageBubble(
                 )
             } else {
                 segments.forEachIndexed { idx, segment ->
+                    key(idx) {
                     when (segment) {
                         is ContentSegment.TextBlock -> {
                             val suffix = if (
@@ -204,10 +194,7 @@ fun MessageBubble(
                                     MaterialTheme.colorScheme.error
                                 } else {
                                     MaterialTheme.colorScheme.onBackground
-                                },
-                                modifier = if (suffix.isNotEmpty()) {
-                                    Modifier.alpha(0.95f + (cursorAlpha * 0.05f))
-                                } else Modifier
+                                }
                             )
                         }
 
@@ -220,6 +207,7 @@ fun MessageBubble(
                             )
                             Spacer(modifier = Modifier.height(10.dp))
                         }
+                    }
                     }
                 }
             }
@@ -339,8 +327,7 @@ private fun parseMarkdownSegments(raw: String): List<ContentSegment> {
     }
     val segments = mutableListOf<ContentSegment>()
     var cursor = 0
-    val fenceRegex = Regex("""```([a-zA-Z0-9_+-]*)\n?([\s\S]*?)(```|$)""")
-    fenceRegex.findAll(raw).forEach { match ->
+    CODE_FENCE_REGEX.findAll(raw).forEach { match ->
         if (match.range.first > cursor) {
             val before = raw.substring(cursor, match.range.first).trim()
             if (before.isNotEmpty()) segments.add(ContentSegment.TextBlock(before))
