@@ -89,9 +89,10 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
+          import os
           from pathlib import Path
 
-          source = Path("$ANDROID_PROJECT_DIR/app/src/main/java/com/example/data/LocalModelStorageManager.kt")
+          source = Path(os.environ["ANDROID_PROJECT_DIR"]) / "app/src/main/java/com/example/data/LocalModelStorageManager.kt"
           text = source.read_text(encoding="utf-8")
           old = "activeJobs.remove(model.id, job)"
           new = """kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.let { currentJob ->
