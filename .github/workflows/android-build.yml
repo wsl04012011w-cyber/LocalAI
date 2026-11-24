@@ -30,6 +30,45 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Extract uploaded project ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p project
+          unzip -q "llamalocal-integrado-llamacpp.zip" -d project
+          echo "ZIP extracted. Initial file listing:"
+          find project -maxdepth 4 -type f | sort | head -n 160
+          echo "Gradle build files:"
+          find project -type f \( -name 'settings.gradle' -o -name 'settings.gradle.kts' -o -name 'build.gradle' -o -name 'build.gradle.kts' -o -name 'libs.versions.toml' -o -name 'gradle-wrapper.properties' \) -print
+
+      - name: Locate Gradle project
+        shell: bash
+        run: |
+          set -euo pipefail
+          SETTINGS="$(find project -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)"
+          if [[ -z "$SETTINGS" ]]; then
+            echo "::error::The ZIP does not contain settings.gradle or settings.gradle.kts. Upload the full Android/Gradle project."
+            exit 1
+          fi
+          ROOT="$(dirname "$SETTINGS")"
+          echo "ANDROID_PROJECT_DIR=$ROOT" >> "$GITHUB_ENV"
+          if [[ -f "$ROOT/gradlew" ]]; then
+            chmod +x "$ROOT/gradlew"
+            echo "HAS_GRADLE_WRAPPER=true" >> "$GITHUB_ENV"
+            echo "Found Gradle wrapper in $ROOT"
+          else
+            echo "HAS_GRADLE_WRAPPER=false" >> "$GITHUB_ENV"
+            echo "::warning::gradlew is missing; the build will use the installed Gradle CLI."
+          fi
+          echo "Found Android project: $ROOT"
+          echo "Root build files:"
+          for file in "$ROOT"/build.gradle "$ROOT"/build.gradle.kts "$ROOT"/gradle/libs.versions.toml; do
+            if [[ -f "$file" ]]; then
+              echo "----- $file -----"
+              sed -n '1,220p' "$file"
+            fi
+          done
+
       - name: Configure Android SDK
         shell: bash
         run: |
@@ -57,42 +96,21 @@ jobs:
             "ndk;26.1.10909125" \
             "ndk;27.0.12077973"
 
-      - name: Extract uploaded project ZIP
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p project
-          unzip -q "llamalocal-integrado-llamacpp.zip" -d project
-          echo "ZIP extracted."
-          find project -maxdepth 5 -type f \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) -print
-
-      - name: Locate Gradle project and wrapper
-        shell: bash
-        run: |
-          set -euo pipefail
-          SETTINGS="$(find project -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)"
-          if [[ -z "$SETTINGS" ]]; then
-            echo "::error::The ZIP does not contain settings.gradle or settings.gradle.kts. Upload the full Android/Gradle project."
-            exit 1
-          fi
-          ROOT="$(dirname "$SETTINGS")"
-          if [[ ! -f "$ROOT/gradlew" ]]; then
-            echo "::error::Gradle project found at $ROOT but gradlew is missing from the ZIP."
-            exit 1
-          fi
-          chmod +x "$ROOT/gradlew"
-          echo "ANDROID_PROJECT_DIR=$ROOT" >> "$GITHUB_ENV"
-          echo "Found Android project: $ROOT"
-
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
 
       - name: Build debug APK
         shell: bash
         run: |
           set -euo pipefail
           cd "$ANDROID_PROJECT_DIR"
-          ./gradlew --no-daemon assembleDebug
+          if [[ "$HAS_GRADLE_WRAPPER" == "true" ]]; then
+            ./gradlew --no-daemon assembleDebug
+          else
+            gradle --no-daemon assembleDebug
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
