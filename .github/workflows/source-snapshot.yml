@@ -31,7 +31,9 @@ jobs:
             --exclude='**/build' \
             --exclude='.cxx' \
             --exclude='**/.cxx' \
-            --exclude='local.properties'
+            --exclude='local.properties' \
+            --exclude='snapshot' \
+            --exclude='**/snapshot'
           cd snapshot
           zip -qr ../LocalAI-engine-baseline.zip LocalAI-main
           cd ..
