@@ -75,8 +75,10 @@ jobs:
           set -euo pipefail
           TARGET="$ANDROID_PROJECT_DIR/app/src/main/java/com/example/data/LocalModelStorageManager.kt"
           if [[ -f "$TARGET" ]]; then
-            echo "----- $TARGET -----"
-            nl -ba "$TARGET" | sed -n '1,260p'
+            echo "----- $TARGET (lines 140-205) -----"
+            nl -ba "$TARGET" | sed -n '140,205p'
+            echo "----- references to job in app Kotlin sources -----"
+            grep -RIn --include='*.kt' -E '\\bjob\\b|\\bjobs\\b' "$ANDROID_PROJECT_DIR/app/src/main" || true
           else
             echo "::warning::Expected Kotlin source file not found; searching project."
             find "$ANDROID_PROJECT_DIR" -name 'LocalModelStorageManager.kt' -print
