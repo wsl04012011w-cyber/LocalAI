@@ -308,6 +308,7 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
             }
             val targetConfig = _uiState.value.config.copy(
                 contextLength = adjustedContext,
+                gpuLayers = 0,
                 thinkingEffort = adjustedThinking
             )
 
@@ -325,7 +326,7 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
                         loadedModel = model,
                         appliedConfig = targetConfig,
                         engineState = EngineLifecycleState.READY,
-                        statusBannerMessage = "${model.name} carregado."
+                        statusBannerMessage = "${model.name} carregado com llama.cpp (CPU)."
                     )
                 }
             } else {
