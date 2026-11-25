@@ -7,15 +7,24 @@ plugins {
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
+  ndkVersion = "27.2.12479018"
 
   defaultConfig {
     applicationId = "com.example"
-    minSdk = 24
+    minSdk = 28
     targetSdk = 36
     versionCode = 1
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    ndk { abiFilters += listOf("arm64-v8a") }
+    externalNativeBuild {
+      cmake {
+        cppFlags += listOf("-std=c++17", "-fexceptions", "-frtti")
+        arguments += listOf("-DANDROID_STL=c++_shared", "-DCMAKE_BUILD_TYPE=Release")
+      }
+    }
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
@@ -33,6 +42,13 @@ android {
       storePassword = "android"
       keyAlias = "androiddebugkey"
       keyPassword = "android"
+    }
+  }
+
+  externalNativeBuild {
+    cmake {
+      path = file("src/main/cpp/CMakeLists.txt")
+      version = "3.22.1"
     }
   }
 
