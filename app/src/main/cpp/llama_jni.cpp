@@ -81,8 +81,15 @@ Java_com_example_engine_NativeLlamaBridge_nativeLoadModel(
 
         llama_model_params model_params = llama_model_default_params();
         model_params.n_gpu_layers = std::max(0, gpu_layers);
-        model_params.use_mmap = use_mmap == JNI_TRUE;
-        model_params.use_mlock = use_mlock == JNI_TRUE;
+        if (use_mmap == JNI_TRUE && use_mlock == JNI_TRUE) {
+            model_params.load_mode = LLAMA_LOAD_MODE_MMAP_MLOCK;
+        } else if (use_mmap == JNI_TRUE) {
+            model_params.load_mode = LLAMA_LOAD_MODE_MMAP;
+        } else if (use_mlock == JNI_TRUE) {
+            model_params.load_mode = LLAMA_LOAD_MODE_MLOCK;
+        } else {
+            model_params.load_mode = LLAMA_LOAD_MODE_NONE;
+        }
         session->model = llama_model_load_from_file(path.c_str(), model_params);
         if (!session->model) {
             throw_java(env, "llama.cpp não abriu o GGUF. Verifique o arquivo e a memória livre.");
