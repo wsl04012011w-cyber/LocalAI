@@ -321,12 +321,19 @@ class LlamaChatViewModel(application: Application) : AndroidViewModel(applicatio
 
             val result = inferenceEngine.loadModel(model, targetConfig)
             if (result.isSuccess) {
+                val autoThinking = inferenceEngine.detectedThinkingSupport()
+                val detectedModel = if (autoThinking != ThinkingSupportMode.NONE) {
+                    model.copy(thinkingSupport = autoThinking)
+                } else model
+                val thinkingStatus = if (autoThinking != ThinkingSupportMode.NONE) {
+                    " • detector automático: Think disponível"
+                } else ""
                 _uiState.update {
                     it.copy(
-                        loadedModel = model,
+                        loadedModel = detectedModel,
                         appliedConfig = targetConfig,
                         engineState = EngineLifecycleState.READY,
-                        statusBannerMessage = "${model.name} carregado com llama.cpp (CPU)."
+                        statusBannerMessage = "${model.name} carregado com llama.cpp (CPU)$thinkingStatus."
                     )
                 }
             } else {

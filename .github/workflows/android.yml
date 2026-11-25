@@ -1,4 +1,4 @@
-name: Android CI
+name: Android Release CI
 
 on:
   push:
@@ -16,42 +16,24 @@ concurrency:
 
 jobs:
   build:
-    name: Build debug APK
+    name: Build optimized arm64 Release APK
     runs-on: ubuntu-latest
     timeout-minutes: 120
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Validate Android project files
-        shell: bash
         run: |
-          missing=0
-          for file in settings.gradle.kts app/build.gradle.kts app/src/main/AndroidManifest.xml; do
-            if [ ! -f "$file" ]; then
-              echo "::error file=$file::Required Android project file is missing."
-              missing=1
-            fi
-          done
-
-          if [ ! -f gradlew ] && [ ! -f build.gradle.kts ] && [ ! -f build.gradle ]; then
-            echo "::error::No Gradle wrapper or root build.gradle(.kts) found. Import the complete Android Studio/AI Studio project."
-            missing=1
-          fi
-
-          if [ "$missing" -ne 0 ]; then
-            echo "The repository currently contains source files only. Add the complete Android project configuration, then push again."
-            exit 1
-          fi
-
+          test -f settings.gradle.kts
+          test -f app/build.gradle.kts
+          test -f app/src/main/AndroidManifest.xml
+          test -f gradlew
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
           cache: gradle
-
       - name: Install Android SDK packages
         shell: bash
         run: |
@@ -59,52 +41,43 @@ jobs:
           if [ ! -x "$SDKMANAGER" ]; then
             SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -path '*/bin/sdkmanager' -type f | sort -V | tail -n 1)"
           fi
-          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
-            echo "::error::Android sdkmanager was not found on the GitHub runner."
-            exit 1
-          fi
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" "cmake;3.22.1" "ndk;27.2.12479018"
-
       - name: Set up Gradle
-        if: ${{ !hashFiles('gradlew') }}
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '9.1.0'
-
       - name: Make Gradle wrapper executable
-        if: ${{ hashFiles('gradlew') != '' }}
         run: chmod +x gradlew
-
-      - name: Generate debug signing keystore
+      - name: Create temporary CI release signing key
         shell: bash
         run: |
-          if [ ! -f debug.keystore ]; then
-            keytool -genkeypair -v \
-              -keystore debug.keystore \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US" \
-              -noprompt
-          fi
-
-      - name: Build debug APK
+          STORE_PASSWORD="ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          keytool -genkeypair -noprompt -v \
+            -keystore "$GITHUB_WORKSPACE/my-upload-key.jks" \
+            -storepass "$STORE_PASSWORD" -alias upload -keypass "$STORE_PASSWORD" \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=LocalAI CI,O=LocalAI,C=BR"
+          {
+            echo "KEYSTORE_PATH=$GITHUB_WORKSPACE/my-upload-key.jks"
+            echo "STORE_PASSWORD=$STORE_PASSWORD"
+            echo "KEY_PASSWORD=$STORE_PASSWORD"
+          } >> "$GITHUB_ENV"
+      - name: Build Release APK
+        run: ./gradlew --no-daemon --parallel --max-workers=2 assembleRelease
+      - name: Report APK size
         shell: bash
         run: |
-          if [ -f gradlew ]; then
-            ./gradlew --no-daemon assembleDebug
-          else
-            gradle --no-daemon assembleDebug
+          APK="$(find app/build/outputs/apk/release -name '*.apk' -type f | head -n 1)"
+          test -n "$APK"
+          SIZE="$(stat -c '%s' "$APK")"
+          echo "Release APK: $APK"
+          echo "Size: $(numfmt --to=iec-i --suffix=B "$SIZE") ($SIZE bytes)"
+          if [ "$SIZE" -gt 31457280 ]; then
+            echo "::warning::Release APK is above the 30 MiB target."
           fi
-
-      - name: Upload debug APK
+      - name: Upload optimized Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: LocalAI-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: LocalAI-release-arm64
+          path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 14

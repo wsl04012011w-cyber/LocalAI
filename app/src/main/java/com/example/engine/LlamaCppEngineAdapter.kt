@@ -5,6 +5,7 @@ import com.example.domain.model.AttachmentType
 import com.example.domain.model.ChatAttachment
 import com.example.domain.model.EngineConfig
 import com.example.domain.model.GgufModelSpec
+import com.example.domain.model.ThinkingSupportMode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -17,6 +18,9 @@ import java.io.File
 class LlamaCppEngineAdapter : LlamaEngineAdapter {
     private val lock = Any()
     private var modelHandle = 0L
+    @Volatile private var detectedThinking = ThinkingSupportMode.NONE
+
+    override fun detectedThinkingSupport(): ThinkingSupportMode = detectedThinking
 
     override suspend fun loadModel(model: GgufModelSpec, config: EngineConfig): Result<Unit> =
         withContext(Dispatchers.IO) {
@@ -36,8 +40,14 @@ class LlamaCppEngineAdapter : LlamaEngineAdapter {
                     config.gpuLayers.coerceAtLeast(0), config.useMmap, config.useMlock
                 )
                 if (handle == 0L) throw IllegalStateException("llama.cpp não conseguiu inicializar o modelo.")
+                detectedThinking = when (NativeLlamaBridge.nativeDetectThinking(handle)) {
+                    2 -> ThinkingSupportMode.EFFORT_LEVELS
+                    1 -> ThinkingSupportMode.BINARY
+                    else -> ThinkingSupportMode.NONE
+                }
                 synchronized(lock) { modelHandle = handle }
-                AppDiagnosticsLogger.info("LLAMA_CPP", "Modelo nativo carregado: ${file.name}")
+                AppDiagnosticsLogger.info("LLAMA_CPP",
+                    "Modelo carregado: ${file.name}; detector thinking=${detectedThinking}")
             }
         }
 
@@ -48,6 +58,7 @@ class LlamaCppEngineAdapter : LlamaEngineAdapter {
     private fun unloadCurrentModel() {
         val old = synchronized(lock) { modelHandle.also { modelHandle = 0L } }
         if (old != 0L) {
+            detectedThinking = ThinkingSupportMode.NONE
             NativeLlamaBridge.nativeStop(old)
             NativeLlamaBridge.nativeUnloadModel(old)
         }

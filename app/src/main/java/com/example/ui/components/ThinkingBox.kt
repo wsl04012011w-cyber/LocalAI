@@ -48,10 +48,10 @@ fun ThinkingBox(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.28f))
+            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.34f))
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.30f),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.42f),
                 shape = RoundedCornerShape(14.dp)
             )
             .testTag("thinking_box")
@@ -68,14 +68,14 @@ fun ThinkingBox(
                 if (isThinkingInProgress) {
                     CircularProgressIndicator(
                         strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.secondary,
+                        color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(14.dp)
                     )
                 } else {
                     Icon(
                         imageVector = Icons.Rounded.AutoAwesome,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.secondary,
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(15.dp)
                     )
                 }
@@ -91,7 +91,7 @@ fun ThinkingBox(
                 Text(
                     text = label,
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
             }
 

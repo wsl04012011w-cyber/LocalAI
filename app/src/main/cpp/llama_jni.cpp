@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -265,6 +266,25 @@ Java_com_example_engine_NativeLlamaBridge_nativeGenerate(
     llama_sampler_free(sampler);
     llama_batch_free(batch);
     return generated;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_example_engine_NativeLlamaBridge_nativeDetectThinking(
+    JNIEnv *, jobject, jlong handle) {
+    auto session = get_session(handle);
+    if (!session || !session->model) return 0;
+    const char * raw_template = llama_model_chat_template(session->model, nullptr);
+    if (!raw_template) return 0;
+    std::string chat_template(raw_template);
+    std::transform(chat_template.begin(), chat_template.end(), chat_template.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const bool effort = chat_template.find("reasoning_effort") != std::string::npos ||
+        chat_template.find("thinking_budget") != std::string::npos ||
+        chat_template.find("think_level") != std::string::npos;
+    const bool markers = chat_template.find("<think>") != std::string::npos ||
+        chat_template.find("</think>") != std::string::npos ||
+        chat_template.find("enable_thinking") != std::string::npos;
+    return effort ? 2 : (markers ? 1 : 0);
 }
 
 extern "C" JNIEXPORT void JNICALL

@@ -13,4 +13,5 @@ internal object NativeLlamaBridge {
         topP: Float, topK: Int, repeatPenalty: Float, callback: TokenCallback): Int
     external fun nativeStop(handle: Long)
     external fun nativeUnloadModel(handle: Long)
+    external fun nativeDetectThinking(handle: Long): Int
 }

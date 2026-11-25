@@ -5,6 +5,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+set(CMAKE_C_FLAGS_RELEASE "-O3 -DNDEBUG -ffunction-sections -fdata-sections" CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -ffunction-sections -fdata-sections" CACHE STRING "" FORCE)
+set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "-Wl,--gc-sections -Wl,--strip-all" CACHE STRING "" FORCE)
+
 # Portable Android arm64 CPU configuration; upstream runtime dispatches CPU kernels.
 set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 set(GGML_CPU_KLEIDIAI ON CACHE BOOL "" FORCE)
@@ -28,5 +32,6 @@ FetchContent_MakeAvailable(llama_cpp)
 
 add_library(ayroff_llama SHARED llama_jni.cpp)
 target_include_directories(ayroff_llama PRIVATE ${llama_cpp_SOURCE_DIR}/include)
-target_compile_options(ayroff_llama PRIVATE -O3 -fexceptions -frtti)
+target_compile_options(ayroff_llama PRIVATE -O3 -DNDEBUG -ffunction-sections -fdata-sections -fexceptions -frtti)
+target_link_options(ayroff_llama PRIVATE -Wl,--gc-sections -Wl,--strip-all)
 target_link_libraries(ayroff_llama PRIVATE llama android log)

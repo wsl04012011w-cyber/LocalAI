@@ -4,6 +4,7 @@ import com.example.data.AppDiagnosticsLogger
 import com.example.domain.model.ChatAttachment
 import com.example.domain.model.EngineConfig
 import com.example.domain.model.GgufModelSpec
+import com.example.domain.model.ThinkingSupportMode
 import kotlinx.coroutines.flow.Flow
 
 class LocalInferenceEngine(
@@ -13,6 +14,8 @@ class LocalInferenceEngine(
         private set
     var appliedConfig: EngineConfig? = null
         private set
+
+    fun detectedThinkingSupport(): ThinkingSupportMode = adapter.detectedThinkingSupport()
 
     suspend fun loadModel(model: GgufModelSpec, config: EngineConfig): Result<Unit> {
         AppDiagnosticsLogger.info("ENGINE",

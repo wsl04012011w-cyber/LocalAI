@@ -3,6 +3,7 @@ package com.example.engine
 import com.example.domain.model.ChatAttachment
 import com.example.domain.model.EngineConfig
 import com.example.domain.model.GgufModelSpec
+import com.example.domain.model.ThinkingSupportMode
 import kotlinx.coroutines.flow.Flow
 
 enum class EngineLifecycleState {
@@ -24,6 +25,7 @@ sealed interface EngineStreamEvent {
 
 interface LlamaEngineAdapter {
     suspend fun loadModel(model: GgufModelSpec, config: EngineConfig): Result<Unit>
+    fun detectedThinkingSupport(): ThinkingSupportMode = ThinkingSupportMode.NONE
     suspend fun unloadModel()
     fun generateStream(
         formattedPrompt: String,

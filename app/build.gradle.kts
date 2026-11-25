@@ -55,7 +55,9 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      isMinifyEnabled = true
+      isShrinkResources = true
+      isJniDebuggable = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
@@ -90,8 +92,12 @@ android {
   }
 
   packaging {
+    jniLibs { useLegacyPackaging = true }
     resources {
       excludes += "/META-INF/{AL2.0,LGPL2.1}"
+      excludes += "/META-INF/DEPENDENCIES"
+      excludes += "/META-INF/NOTICE*"
+      excludes += "/META-INF/LICENSE*"
     }
   }
 }
