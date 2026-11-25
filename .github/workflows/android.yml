@@ -45,7 +45,10 @@ jobs:
           "$SDKMANAGER" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" "cmake;3.22.1" "ndk;27.2.12479018"
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.1.0'
       - name: Make Gradle wrapper executable
+        if: ${{ hashFiles('gradlew') != '' }}
         run: chmod +x gradlew
       - name: Create temporary CI release signing key
         shell: bash
