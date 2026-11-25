@@ -184,6 +184,8 @@ Java_com_example_engine_NativeLlamaBridge_nativeGenerate(
         throw_java(env, "Não foi possível reservar memória para o batch.");
         return 0;
     }
+    // Clear KV cache before processing new prompt to avoid interference from previous generation
+    llama_kv_cache_clear(session->context);
     if (!decode_tokens(*session, batch, prompt_tokens, std::max(1, batch_capacity))) {
         llama_batch_free(batch);
         throw_java(env, "llama.cpp falhou no prompt. Pode haver memória insuficiente.");

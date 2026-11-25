@@ -34,16 +34,17 @@ class ThinkingTagParser {
             val current = pendingBuffer.toString()
             when (mode) {
                 Mode.BEFORE_OR_CONTENT -> {
-                    val startIdx = current.indexOf(OPEN_TAG)
+                    // Try both tag formats: <think> and think
+                    val (startIdx, openTagLen) = findOpenTag(current)
                     if (startIdx >= 0) {
                         if (startIdx > 0) {
                             contentOut.append(current.substring(0, startIdx))
                         }
-                        pendingBuffer.delete(0, startIdx + OPEN_TAG.length)
+                        pendingBuffer.delete(0, startIdx + openTagLen)
                         mode = Mode.IN_THINK_TAG
                         entered = true
                     } else {
-                        val partialMatch = trailingPrefixLength(current, OPEN_TAG)
+                        val partialMatch = maxTrailingPrefix(current, OPEN_TAGS)
                         val safeLen = current.length - partialMatch
                         if (safeLen > 0) {
                             contentOut.append(current.substring(0, safeLen))
@@ -54,16 +55,17 @@ class ThinkingTagParser {
                 }
 
                 Mode.IN_THINK_TAG -> {
-                    val endIdx = current.indexOf(CLOSE_TAG)
+                    // Try both tag formats: </think> and /think
+                    val (endIdx, closeTagLen) = findCloseTag(current)
                     if (endIdx >= 0) {
                         if (endIdx > 0) {
                             thinkingOut.append(current.substring(0, endIdx))
                         }
-                        pendingBuffer.delete(0, endIdx + CLOSE_TAG.length)
+                        pendingBuffer.delete(0, endIdx + closeTagLen)
                         mode = Mode.BEFORE_OR_CONTENT
                         exited = true
                     } else {
-                        val partialMatch = trailingPrefixLength(current, CLOSE_TAG)
+                        val partialMatch = maxTrailingPrefix(current, CLOSE_TAGS)
                         val safeLen = current.length - partialMatch
                         if (safeLen > 0) {
                             thinkingOut.append(current.substring(0, safeLen))
@@ -95,18 +97,39 @@ class ThinkingTagParser {
         }
     }
 
-    private fun trailingPrefixLength(text: String, tag: String): Int {
-        val maxCheck = minOf(text.length, tag.length - 1)
-        for (len in maxCheck downTo 1) {
-            if (text.endsWith(tag.substring(0, len))) {
-                return len
+    private fun findOpenTag(text: String): Pair<Int, Int> {
+        // Check for <think> first (more specific), then think
+        val idx1 = text.indexOf("<think>")
+        if (idx1 >= 0) return idx1 to 7
+        val idx2 = text.indexOf("think")
+        if (idx2 >= 0) return idx2 to 5
+        return -1 to 0
+    }
+
+    private fun findCloseTag(text: String): Pair<Int, Int> {
+        // Check for </think> first, then /think
+        val idx1 = text.indexOf("</think>")
+        if (idx1 >= 0) return idx1 to 8
+        val idx2 = text.indexOf("/think")
+        if (idx2 >= 0) return idx2 to 6
+        return -1 to 0
+    }
+
+    private fun maxTrailingPrefix(text: String, tags: List<String>): Int {
+        var maxLen = 0
+        for (tag in tags) {
+            val maxCheck = minOf(text.length, tag.length - 1)
+            for (len in maxCheck downTo 1) {
+                if (text.endsWith(tag.substring(0, len))) {
+                    maxLen = maxOf(maxLen, len)
+                }
             }
         }
-        return 0
+        return maxLen
     }
 
     companion object {
-        private const val OPEN_TAG = "<think>"
-        private const val CLOSE_TAG = "</think>"
+        private val OPEN_TAGS = listOf("<think>", "think")
+        private val CLOSE_TAGS = listOf("</think>", "/think")
     }
 }
