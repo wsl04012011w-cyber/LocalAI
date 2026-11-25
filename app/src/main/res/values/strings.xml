@@ -10,4 +10,11 @@
     <string name="cd_regenerate">Gerar novamente</string>
     <string name="cd_delete_session">Excluir conversa</string>
     <string name="cd_import_model">Importar modelo do aparelho</string>
+    <string name="cd_pick_gguf">Selecionar arquivo GGUF</string>
+    <string name="cd_thinking_toggle">Alternar modo de raciocínio</string>
+    <string name="cd_context_slider">Ajustar janela de contexto</string>
+    <string name="cd_remove_attachment">Remover anexo</string>
+    <string name="cd_delete_model">Excluir modelo baixado</string>
+    <string name="cd_cancel_download">Cancelar download</string>
+    <string name="cd_toggle_thinking_box">Expandir ou recolher raciocínio</string>
 </resources>
