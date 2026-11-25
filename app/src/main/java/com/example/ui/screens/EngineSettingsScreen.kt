@@ -97,14 +97,10 @@ fun EngineSettingsScreen(
                         testTag = "slider_threads"
                     )
 
-                    IntSliderRow(
-                        label = "Camadas GPU",
-                        value = config.gpuLayers,
-                        range = EngineLimits.MIN_GPU_LAYERS..EngineLimits.MAX_GPU_LAYERS,
-                        step = 1,
-                        valueLabel = config.gpuLayers.toString(),
-                        onValueChange = { onAction(LlamaChatAction.UpdateGpuLayers(it)) },
-                        testTag = "slider_gpu_layers"
+                    Text(
+                        text = "Backend nativo: llama.cpp CPU arm64 com otimizações KleidiAI. Offload GPU não está ativado nesta build.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
                     SwitchRow(
