@@ -27,7 +27,7 @@ jobs:
           test -f settings.gradle.kts
           test -f app/build.gradle.kts
           test -f app/src/main/AndroidManifest.xml
-          test -f gradlew
+          test -f build.gradle.kts
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -62,7 +62,13 @@ jobs:
             echo "KEY_PASSWORD=$STORE_PASSWORD"
           } >> "$GITHUB_ENV"
       - name: Build Release APK
-        run: ./gradlew --no-daemon --parallel --max-workers=2 assembleRelease
+        shell: bash
+        run: |
+          if [ -f gradlew ]; then
+            ./gradlew --no-daemon --parallel --max-workers=2 assembleRelease
+          else
+            gradle --no-daemon --parallel --max-workers=2 assembleRelease
+          fi
       - name: Report APK size
         shell: bash
         run: |
